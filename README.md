@@ -21,6 +21,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `tests/` - Pester tests executed locally and in CI.
 - `data/samples/` - Synthetic canonical datasets for sign-ins and registrations, used by `scripts/replay-samples.ps1`.
 - `docs/guides/` - Operational playbooks (e.g., Entra tenant onboarding checklist).
+- `docs/detections/` - Detection strategy, rule specs, and future playbooks/tests (Phase 4).
 - `.github/workflows/` - Windows CI pipeline (`powershell-ci.yml`).
 
 ## Current PowerShell Commands
