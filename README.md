@@ -7,6 +7,7 @@ MFA Check & Steer delivers PowerShell-first tooling that helps SecOps teams dete
 - Clone this repository: `git clone https://github.com/fusioncomputing/MFACheckandSteer.git`.
 - Run `scripts/setup.ps1` to install required modules (Pester, PSScriptAnalyzer, Microsoft.Graph).
 - Execute `scripts/smoke-tests.ps1` to validate your environment, then `Invoke-Pester -Path tests` to run the baseline test suite.
+- When a Global Administrator is available, run `scripts/connect-device-login.ps1` to complete a device-code Microsoft Graph sign-in and cache credentials for subsequent commands.
 - Review `roadmap.md` for the numbered development plan and `agents.md` for implementation guidance tailored to Windows.
 - Explore the Phase 1 deliverables in `docs/` (stakeholder interviews, KPI baseline, compliance notes, project charter, cadence plan).
 - Inspect the PowerShell module under `src/` and accompanying tests in `tests/` to understand current capabilities.
@@ -16,13 +17,14 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 ## Repository Layout
 - `docs/` — Phase 1 discovery artifacts and Phase 2 foundation decisions.
 - `src/` — `MFACheckandSteer` PowerShell module (baseline environment checks).
-- `scripts/` — Setup and smoke-test scripts.
+- `scripts/` — Setup, smoke-test, and device login helper scripts.
 - `tests/` — Pester tests executed locally and in CI.
 - `.github/workflows/` — Windows CI pipeline (`powershell-ci.yml`).
 
 ## Current PowerShell Commands
 - `Get-MfaEnvironmentStatus` — Report availability and versions of required PowerShell modules.
 - `Test-MfaGraphPrerequisite` — Quick check to confirm Microsoft Graph tooling is installed.
+- `Connect-MfaGraphDeviceCode` — Guide a Global Admin through device login and return the active Graph context.
 - `Get-MfaEntraSignIn` — Retrieve Microsoft Entra sign-in logs for a given time window (requires connected Graph context).
 - `Get-MfaEntraRegistration` — Fetch MFA authentication methods for specified users.
 

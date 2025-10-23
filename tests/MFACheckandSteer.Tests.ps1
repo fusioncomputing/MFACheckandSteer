@@ -1,5 +1,23 @@
 Import-Module "$PSScriptRoot/../src/MFACheckandSteer.psd1" -Force
 
+BeforeAll {
+    if (-not (Get-Command -Name Select-MgProfile -ErrorAction SilentlyContinue)) {
+        function Select-MgProfile {
+            param([string] $Name)
+        }
+    }
+    if (-not (Get-Command -Name Connect-MgGraph -ErrorAction SilentlyContinue)) {
+        function Connect-MgGraph {
+            [CmdletBinding()]
+            param(
+                [string[]] $Scopes,
+                [switch] $UseDeviceCode,
+                [switch] $NoWelcome
+            )
+        }
+    }
+}
+
 Describe 'MFACheckandSteer module' {
     It 'exports Get-MfaEnvironmentStatus' {
         (Get-Command Get-MfaEnvironmentStatus).Module.Name | Should -Be 'MFACheckandSteer'
@@ -9,6 +27,39 @@ Describe 'MFACheckandSteer module' {
         $result = Get-MfaEnvironmentStatus
         $result | Should -Not -BeNullOrEmpty
         @($result).Count | Should -BeGreaterThan 0
+    }
+}
+
+Describe 'Connect-MfaGraphDeviceCode' {
+    InModuleScope MFACheckandSteer {
+        BeforeEach {
+            Mock -CommandName Test-MfaGraphPrerequisite -ModuleName MFACheckandSteer -MockWith { $true }
+            Mock -CommandName Get-Command -ModuleName MFACheckandSteer -MockWith {
+                param([string] $Name, [object] $ErrorAction)
+                return $null
+            }
+            Mock -CommandName Connect-MgGraph -ModuleName MFACheckandSteer -MockWith { param($Scopes, $UseDeviceCode, $NoWelcome) }
+            Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    TenantId = 'contoso-tenant'
+                    Account  = [pscustomobject]@{ Username = 'admin@contoso.com' }
+                    Scopes   = @('AuditLog.Read.All')
+                }
+            }
+        }
+
+        It 'invokes Connect-MgGraph with device code flow' {
+            Connect-MfaGraphDeviceCode | Out-Null
+
+            Assert-MockCalled Connect-MgGraph -Times 1 -Exactly -Scope It -ParameterFilter {
+                $UseDeviceCode -and $NoWelcome
+            }
+        }
+
+        It 'skips beta profile when requested' {
+            Connect-MfaGraphDeviceCode -SkipBetaProfile | Out-Null
+            Assert-MockCalled Connect-MgGraph -Times 1 -Exactly -Scope It
+        }
     }
 }
 

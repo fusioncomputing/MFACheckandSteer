@@ -25,10 +25,10 @@ These notes capture the current repo status, the practical limitations of runnin
 - Keep outputs concise; summarize command results instead of dumping entire logs unless the user explicitly requests the full output.
 
 ## Near-Term Tasks for the Agent
-1. Enrich the PowerShell module with Entra MFA ingestion logic (Phase 3) once service principal credentials are available.
-2. Build detection rules and response playbooks aligned with roadmap items 4.x and 5.x.
-3. Expand CI gates (linting, packaging) after the module gains functional commands.
-4. Maintain documentation parity—update Phase 2 artifacts as tooling evolves and capture lessons learned in `docs/`.
-5. Coordinate with SecOps to integrate KPI dashboards and reporting workflows defined in Phase 5.
+1. Validate device login helper (`scripts/connect-device-login.ps1`) against production tenants and note any consent prompts or conditional access quirks.
+2. Enrich the PowerShell module with Entra MFA ingestion logic (Phase 3) once service principal credentials are available.
+3. Build detection rules and response playbooks aligned with roadmap items 4.x and 5.x.
+4. Expand CI gates (linting, packaging) after the module gains functional commands.
+5. Maintain documentation parity—update Phase 2/3 artifacts as tooling evolves and capture lessons learned in `docs/`.
 
 Keep this document updated as platform assumptions change or new constraints emerge.

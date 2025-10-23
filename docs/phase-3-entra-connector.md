@@ -13,6 +13,7 @@ This document records the implementation details for roadmap tasks **3.1–3.6**
 |----------|---------|-------|
 | `Get-MfaEntraSignIn` | Fetch sign-in logs with optional user filter and custom date range. | Requires prior `Connect-MgGraph`; uses `Get-MgAuditLogSignIn` with consistency level set to `eventual`. |
 | `Get-MfaEntraRegistration` | Retrieve authentication methods for one or more users. | Wraps `Get-MgUserAuthenticationMethod`; emits raw method objects for now. |
+| `Connect-MfaGraphDeviceCode` | Convenience helper that runs Microsoft Graph device login using a Global Admin account. | Selects the beta profile by default after authentication and returns the resulting context. |
 
 Both functions validate Graph availability via `Get-MgContext` and throw actionable errors when prerequisites are missing.
 
@@ -21,6 +22,9 @@ Both functions validate Graph availability via `Get-MgContext` and throw actiona
 # Connect using service principal or interactive auth before calling.
 Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $Thumbprint
 Select-MgProfile -Name beta
+
+# Or perform a one-time device login with a Global Admin and cached credentials:
+.\scripts\connect-device-login.ps1
 
 # Pull the last 24 hours of sign-ins for a specific user
 Get-MfaEntraSignIn -StartTime (Get-Date).AddHours(-24) -EndTime (Get-Date) -UserPrincipalName 'analyst@contoso.com'

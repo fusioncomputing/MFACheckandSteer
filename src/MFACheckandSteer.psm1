@@ -89,6 +89,55 @@ function Invoke-MfaGraphAuthenticationMethodQuery {
     return Get-MgUserAuthenticationMethod -UserId $UserId -All
 }
 
+function Connect-MfaGraphDeviceCode {
+    [CmdletBinding()]
+    param(
+        [string[]] $Scopes = @(
+            'AuditLog.Read.All',
+            'Policy.Read.All',
+            'Directory.Read.All',
+            'UserAuthenticationMethod.Read.All',
+            'IdentityRiskyUser.Read.All'
+        ),
+        [switch] $SkipBetaProfile
+    )
+
+    if (-not (Test-MfaGraphPrerequisite)) {
+        throw "Microsoft.Graph module is not installed. Run scripts/setup.ps1 before attempting to connect."
+    }
+
+    Write-Verbose "Requesting Graph device code sign-in for scopes: $($Scopes -join ', ')"
+
+    try {
+        Connect-MgGraph -Scopes $Scopes -UseDeviceCode -NoWelcome | Out-Null
+    }
+    catch {
+        throw "Connect-MgGraph using device code failed: $_"
+    }
+
+    if (-not $SkipBetaProfile.IsPresent) {
+        $profileCommand = Get-Command -Name Select-MgProfile -ErrorAction SilentlyContinue
+        if ($profileCommand) {
+            try {
+                Select-MgProfile -Name beta
+            }
+            catch {
+                Write-Warning "Failed to select the beta profile: $_"
+            }
+        }
+        else {
+            Write-Warning "Select-MgProfile command not found. Install the Microsoft.Graph module bundle if beta profile selection is required."
+        }
+    }
+
+    $context = Get-MfaGraphContext
+    if (-not $context) {
+        throw "Graph context was not established after device login."
+    }
+
+    return $context
+}
+
 function Get-MfaEntraSignIn {
     [CmdletBinding()]
     param(
@@ -141,4 +190,4 @@ function Get-MfaEntraRegistration {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode
