@@ -15,11 +15,12 @@ MFA Check & Steer delivers PowerShell-first tooling that helps SecOps teams dete
 Continuous integration runs the same setup and Pester tests on Windows runners via GitHub Actions.
 
 ## Repository Layout
-- `docs/` — Phase 1 discovery artifacts and Phase 2 foundation decisions.
-- `src/` — `MFACheckandSteer` PowerShell module (baseline environment checks).
-- `scripts/` — Setup, smoke-test, and device login helper scripts (device login will rerun the setup script to ensure dependencies are present).
-- `tests/` — Pester tests executed locally and in CI.
-- `.github/workflows/` — Windows CI pipeline (`powershell-ci.yml`).
+- `docs/` - Phase 1 discovery artifacts and Phase 2 foundation decisions.
+- `src/` - `MFACheckandSteer` PowerShell module (baseline environment checks).
+- `scripts/` - Setup, smoke-test, sample replay, and device login helper scripts (device login reruns the setup script to ensure dependencies are present).
+- `tests/` - Pester tests executed locally and in CI.
+- `data/samples/` - Synthetic canonical datasets for sign-ins and registrations, used by `scripts/replay-samples.ps1`.
+- `.github/workflows/` - Windows CI pipeline (`powershell-ci.yml`).
 
 ## Current PowerShell Commands
 - `Get-MfaEnvironmentStatus` - Report availability and versions of required PowerShell modules.
@@ -28,6 +29,11 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `Get-MfaEntraSignIn` - Retrieve Microsoft Entra sign-in logs for a given time window (supports `-Normalize` to emit canonical records).
 - `Get-MfaEntraRegistration` - Fetch MFA authentication methods for specified users (supports `-Normalize` to emit canonical records).
 - `ConvertTo-MfaCanonicalSignIn` / `ConvertTo-MfaCanonicalRegistration` - Transform raw Graph objects into the schema described in `docs/phase-3-canonical-schema.md`.
+
+## Sample Data
+- Run `pwsh scripts/replay-samples.ps1` to view the synthetic MFA datasets included under `data/samples/`.
+- Use `-Dataset SignIn|Registration` and `-AsJson` to export specific samples for automated tests or demos.
+- Refer to `docs/phase-3-sample-data.md` for detailed guidance.
 
 ## Next Steps
 - Implement Entra MFA data connectors and schema normalization (roadmap Phase 3).

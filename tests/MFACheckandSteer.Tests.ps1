@@ -226,3 +226,19 @@ Describe 'Get-MfaEntraRegistration' {
         }
     }
 }
+
+Describe 'Sample replay script' {
+    It 'emits sign-in sample data as JSON' {
+        $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath '../scripts/replay-samples.ps1'
+        $json = & $scriptPath -Dataset SignIn -AsJson
+        $parsed = $json | ConvertFrom-Json
+        $parsed.SignIns.Count | Should -Be 2
+    }
+
+    It 'emits registration sample data as JSON' {
+        $scriptPath = Join-Path -Path $PSScriptRoot -ChildPath '../scripts/replay-samples.ps1'
+        $json = & $scriptPath -Dataset Registration -AsJson
+        $parsed = $json | ConvertFrom-Json
+        $parsed.Registrations.Count | Should -Be 2
+    }
+}

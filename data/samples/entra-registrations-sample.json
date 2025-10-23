@@ -1,0 +1,36 @@
+[
+  {
+    "RecordType": "Registration",
+    "UserPrincipalName": "analyst@example.com",
+    "UserId": "11111111-1111-1111-1111-111111111111",
+    "MethodId": "phone-default",
+    "MethodType": "phoneAuthenticationMethod",
+    "DisplayName": "Analyst Mobile",
+    "IsDefault": true,
+    "IsUsable": true,
+    "PhoneNumber": "+15551230001",
+    "PhoneType": "mobile",
+    "KeyDeviceId": null,
+    "CreatedDateTime": "2024-12-01T16:01:30Z",
+    "LastUpdatedDateTime": "2025-08-14T09:45:00Z",
+    "AdditionalData": null
+  },
+  {
+    "RecordType": "Registration",
+    "UserPrincipalName": "engineer@example.com",
+    "UserId": "22222222-2222-2222-2222-222222222222",
+    "MethodId": "fido2-key-01",
+    "MethodType": "fido2AuthenticationMethod",
+    "DisplayName": "Engineering YubiKey",
+    "IsDefault": false,
+    "IsUsable": true,
+    "PhoneNumber": null,
+    "PhoneType": null,
+    "KeyDeviceId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "CreatedDateTime": "2025-03-10T11:22:45Z",
+    "LastUpdatedDateTime": "2025-05-09T18:11:12Z",
+    "AdditionalData": {
+      "aaguid": "08987058-cacd-4b81-b6e1-30de50dcbe96"
+    }
+  }
+]
