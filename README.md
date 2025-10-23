@@ -22,11 +22,12 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `.github/workflows/` — Windows CI pipeline (`powershell-ci.yml`).
 
 ## Current PowerShell Commands
-- `Get-MfaEnvironmentStatus` — Report availability and versions of required PowerShell modules.
-- `Test-MfaGraphPrerequisite` — Quick check to confirm Microsoft Graph tooling is installed.
-- `Connect-MfaGraphDeviceCode` — Guide a Global Admin through device login and return the active Graph context.
-- `Get-MfaEntraSignIn` — Retrieve Microsoft Entra sign-in logs for a given time window (requires connected Graph context).
-- `Get-MfaEntraRegistration` — Fetch MFA authentication methods for specified users.
+- `Get-MfaEnvironmentStatus` - Report availability and versions of required PowerShell modules.
+- `Test-MfaGraphPrerequisite` - Quick check to confirm Microsoft Graph tooling is installed.
+- `Connect-MfaGraphDeviceCode` - Guide a Global Admin through device login and return the active Graph context (device helper reruns the setup script first).
+- `Get-MfaEntraSignIn` - Retrieve Microsoft Entra sign-in logs for a given time window (supports `-Normalize` to emit canonical records).
+- `Get-MfaEntraRegistration` - Fetch MFA authentication methods for specified users (supports `-Normalize` to emit canonical records).
+- `ConvertTo-MfaCanonicalSignIn` / `ConvertTo-MfaCanonicalRegistration` - Transform raw Graph objects into the schema described in `docs/phase-3-canonical-schema.md`.
 
 ## Next Steps
 - Implement Entra MFA data connectors and schema normalization (roadmap Phase 3).

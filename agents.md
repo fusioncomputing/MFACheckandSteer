@@ -4,7 +4,7 @@ These notes capture the current repo status, the practical limitations of runnin
 
 ## Environment Snapshot
 - Host OS: Windows (PowerShell is the default shell exposed to the agent).
-- Repository: `MFACheckandSteer` now includes Phase 1 documentation, the Phase 2 PowerShell module scaffold, and initial Phase 3 Entra connector commands (`Get-MfaEntraSignIn`, `Get-MfaEntraRegistration`).
+- Repository: `MFACheckandSteer` now includes Phase 1 documentation, the Phase 2 PowerShell module scaffold, and Phase 3 Entra connector commands with canonical normalization helpers (`Get-MfaEntraSignIn -Normalize`, `Get-MfaEntraRegistration -Normalize`, `ConvertTo-MfaCanonical*`).
 - Harness: Codex CLI with GPT-5 model (`approval_policy=never`, `danger-full-access`, network enabled).
 - File system: NTFS semantics (case-insensitive by default, CRLF newlines common).
 
@@ -29,6 +29,6 @@ These notes capture the current repo status, the practical limitations of runnin
 2. Enrich the PowerShell module with Entra MFA ingestion logic (Phase 3) once service principal credentials are available.
 3. Build detection rules and response playbooks aligned with roadmap items 4.x and 5.x.
 4. Expand CI gates (linting, packaging) after the module gains functional commands.
-5. Maintain documentation parity—update Phase 2/3 artifacts as tooling evolves and capture lessons learned in `docs/`.
+5. Maintain documentation parity—update Phase 2/3 artifacts (including canonical schema notes) as tooling evolves and capture lessons learned in `docs/`.
 
 Keep this document updated as platform assumptions change or new constraints emerge.

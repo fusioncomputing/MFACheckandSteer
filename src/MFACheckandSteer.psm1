@@ -138,6 +138,198 @@ function Connect-MfaGraphDeviceCode {
     return $context
 }
 
+function Get-MfaDynamicPropertyValue {
+    param(
+        [Parameter(Mandatory)]
+        [object] $InputObject,
+        [Parameter(Mandatory)]
+        [string] $PropertyName
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+
+    $property = $InputObject.PSObject.Properties.Match($PropertyName)
+    if ($property) {
+        return $property.Value
+    }
+
+    $lowerName = ($PropertyName.Substring(0,1).ToLower() + $PropertyName.Substring(1))
+    $lowerProperty = $InputObject.PSObject.Properties.Match($lowerName)
+    if ($lowerProperty) {
+        return $lowerProperty.Value
+    }
+
+    $dictionaryNames = @(
+        $PropertyName,
+        $lowerName,
+        $PropertyName.ToLower(),
+        $PropertyName.ToUpper()
+    )
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        foreach ($name in $dictionaryNames) {
+            if ($InputObject.Contains($name)) {
+                return $InputObject[$name]
+            }
+        }
+        if ($InputObject -is [System.Collections.Generic.IDictionary[string, object]]) {
+            foreach ($name in $dictionaryNames) {
+                if ($InputObject.ContainsKey($name)) {
+                    return $InputObject[$name]
+                }
+            }
+        }
+    }
+
+    $additional = $InputObject.PSObject.Properties.Match('AdditionalProperties').Value
+    if (-not $additional) {
+        $additional = $InputObject.AdditionalProperties
+    }
+
+    if ($additional -and $additional -is [System.Collections.IDictionary]) {
+        foreach ($name in $dictionaryNames) {
+            if ($additional.Contains($name)) {
+                return $additional[$name]
+            }
+        }
+        if ($additional -is [System.Collections.Generic.IDictionary[string, object]]) {
+            foreach ($name in $dictionaryNames) {
+                if ($additional.ContainsKey($name)) {
+                    return $additional[$name]
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
+function ConvertTo-MfaCanonicalSignIn {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $InputObject
+    )
+    process {
+        if (-not $InputObject) {
+            return
+        }
+
+        $location = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'Location'
+        $status = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'Status'
+        $authDetails = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'AuthenticationDetails'
+
+        $authMethods = @()
+        if ($authDetails) {
+            foreach ($detail in $authDetails) {
+                $method = Get-MfaDynamicPropertyValue -InputObject $detail -PropertyName 'AuthenticationMethod'
+                if ($method) {
+                    $authMethods += $method
+                }
+            }
+        }
+
+        $policies = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'AuthenticationRequirementPolicies'
+
+        $resultErrorCode = if ($status) { Get-MfaDynamicPropertyValue -InputObject $status -PropertyName 'ErrorCode' } else { $null }
+        $resultFailureReason = if ($status) { Get-MfaDynamicPropertyValue -InputObject $status -PropertyName 'FailureReason' } else { $null }
+        $resultAdditionalDetails = if ($status) { Get-MfaDynamicPropertyValue -InputObject $status -PropertyName 'AdditionalDetails' } else { $null }
+
+        $result = if ($resultErrorCode -eq 0) { 'Success' } else { 'Failure' }
+
+        [pscustomobject]@{
+            RecordType                      = 'SignIn'
+            Id                              = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'Id'
+            TenantId                        = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'UserTenantId'
+            CreatedDateTime                 = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'CreatedDateTime'
+            UserId                          = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'UserId'
+            UserPrincipalName               = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'UserPrincipalName'
+            UserDisplayName                 = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'UserDisplayName'
+            AppDisplayName                  = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'AppDisplayName'
+            AppId                           = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'AppId'
+            IpAddress                       = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'IpAddress'
+            LocationCity                    = if ($location) { Get-MfaDynamicPropertyValue -InputObject $location -PropertyName 'City' } else { $null }
+            LocationState                   = if ($location) { Get-MfaDynamicPropertyValue -InputObject $location -PropertyName 'State' } else { $null }
+            LocationCountryOrRegion         = if ($location) { Get-MfaDynamicPropertyValue -InputObject $location -PropertyName 'CountryOrRegion' } else { $null }
+            IsInteractive                   = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'IsInteractive'
+            AuthenticationRequirement       = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'AuthenticationRequirement'
+            AuthenticationRequirementPolicies = if ($policies) { ($policies -join ';') } else { $null }
+            AuthenticationMethods           = if ($authMethods) { ($authMethods -join ';') } else { $null }
+            ConditionalAccessStatus         = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'ConditionalAccessStatus'
+            RiskDetail                      = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'RiskDetail'
+            RiskLevelAggregated             = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'RiskLevelAggregated'
+            RiskState                       = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'RiskState'
+            CorrelationId                   = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'CorrelationId'
+            Result                          = $result
+            ResultErrorCode                 = $resultErrorCode
+            ResultFailureReason             = $resultFailureReason
+            ResultAdditionalDetails         = $resultAdditionalDetails
+        }
+    }
+}
+
+function ConvertTo-MfaCanonicalRegistration {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $InputObject,
+        [string] $UserPrincipalName
+    )
+    process {
+        if (-not $InputObject) {
+            return
+        }
+
+        $odataType = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName '@odata.type'
+        if (-not $odataType) {
+            $additional = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName '@odata.type'
+            if ($additional) {
+                $odataType = $additional
+            }
+        }
+        if (-not $odataType) {
+            $additionalProps = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'AdditionalProperties'
+            if ($additionalProps -and $additionalProps.ContainsKey('@odata.type')) {
+                $odataType = $additionalProps['@odata.type']
+            }
+        }
+
+        $methodType = $null
+        if ($odataType) {
+            $methodType = $odataType.Split('.')[-1].TrimStart('#')
+        }
+
+        $additionalData = @{}
+        $additional = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'AdditionalProperties'
+        if ($additional) {
+            foreach ($key in $additional.Keys) {
+                if ($key -notin @('@odata.type', 'id', 'displayName', 'createdDateTime', 'lastUpdatedDateTime', 'phoneNumber', 'phoneType', 'isDefault', 'isUsable', 'isEnabled')) {
+                    $additionalData[$key] = $additional[$key]
+                }
+            }
+        }
+
+        [pscustomobject]@{
+            RecordType          = 'Registration'
+            UserPrincipalName   = $UserPrincipalName
+            UserId              = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'UserId'
+            MethodId            = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'Id'
+            MethodType          = $methodType
+            DisplayName         = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'DisplayName'
+            IsDefault           = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'IsDefault'
+            IsUsable            = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'IsUsable'
+            PhoneNumber         = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'PhoneNumber'
+            PhoneType           = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'PhoneType'
+            KeyDeviceId         = (Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'DeviceId') ?? (Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'KeyId')
+            CreatedDateTime     = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'CreatedDateTime'
+            LastUpdatedDateTime = Get-MfaDynamicPropertyValue -InputObject $InputObject -PropertyName 'LastUpdatedDateTime'
+            AdditionalData      = if ($additionalData.Count -gt 0) { $additionalData } else { $null }
+        }
+    }
+}
+
 function Get-MfaEntraSignIn {
     [CmdletBinding()]
     param(
@@ -147,7 +339,8 @@ function Get-MfaEntraSignIn {
         [datetime] $EndTime,
         [string] $UserPrincipalName,
         [int] $Top = 200,
-        [switch] $All
+        [switch] $All,
+        [switch] $Normalize
     )
 
     if ($EndTime -lt $StartTime) {
@@ -170,7 +363,13 @@ function Get-MfaEntraSignIn {
     }
 
     $filter = ($filterParts -join ' and ')
-    return Invoke-MfaGraphSignInQuery -Filter $filter -All:$All.IsPresent -Top $Top
+    $results = Invoke-MfaGraphSignInQuery -Filter $filter -All:$All.IsPresent -Top $Top
+
+    if ($Normalize) {
+        return $results | ConvertTo-MfaCanonicalSignIn
+    }
+
+    return $results
 }
 
 function Get-MfaEntraRegistration {
@@ -178,7 +377,8 @@ function Get-MfaEntraRegistration {
     param(
         [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
         [Alias('UserPrincipalName')]
-        [string] $UserId
+        [string] $UserId,
+        [switch] $Normalize
     )
     process {
         $context = Get-MfaGraphContext
@@ -186,8 +386,14 @@ function Get-MfaEntraRegistration {
             throw "Microsoft Graph context not found. Run Connect-MgGraph before calling Get-MfaEntraRegistration."
         }
 
-        Invoke-MfaGraphAuthenticationMethodQuery -UserId $UserId
+        $results = Invoke-MfaGraphAuthenticationMethodQuery -UserId $UserId
+
+        if ($Normalize) {
+            return $results | ConvertTo-MfaCanonicalRegistration -UserPrincipalName $UserId
+        }
+
+        return $results
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration

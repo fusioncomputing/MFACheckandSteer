@@ -63,6 +63,78 @@ Describe 'Connect-MfaGraphDeviceCode' {
     }
 }
 
+Describe 'ConvertTo-MfaCanonicalSignIn' {
+    InModuleScope MFACheckandSteer {
+        It 'creates canonical sign-in object' {
+            $input = [pscustomobject]@{
+                Id = '123'
+                UserTenantId = 'tenant'
+                CreatedDateTime = [datetime]'2025-10-23T12:00:00Z'
+                UserId = 'user-id'
+                UserPrincipalName = 'user@contoso.com'
+                UserDisplayName = 'User One'
+                AppDisplayName = 'App'
+                AppId = 'app-id'
+                IpAddress = '10.0.0.1'
+                IsInteractive = $true
+                AuthenticationRequirement = 'mfa'
+                AuthenticationRequirementPolicies = @('policyA','policyB')
+                AuthenticationDetails = @(
+                    [pscustomobject]@{ AuthenticationMethod = 'password' },
+                    [pscustomobject]@{ AuthenticationMethod = 'sms' }
+                )
+                ConditionalAccessStatus = 'success'
+                RiskDetail = 'none'
+                RiskLevelAggregated = 'low'
+                RiskState = 'none'
+                CorrelationId = 'corr-id'
+                Location = [pscustomobject]@{
+                    City = 'Seattle'
+                    State = 'WA'
+                    CountryOrRegion = 'US'
+                }
+                Status = [pscustomobject]@{
+                    ErrorCode = 0
+                    FailureReason = $null
+                    AdditionalDetails = 'details'
+                }
+            }
+
+            $result = ConvertTo-MfaCanonicalSignIn -InputObject $input
+            $result.RecordType | Should -Be 'SignIn'
+            $result.AuthenticationMethods | Should -Be 'password;sms'
+            $result.AuthenticationRequirementPolicies | Should -Be 'policyA;policyB'
+            $result.Result | Should -Be 'Success'
+            $result.LocationCity | Should -Be 'Seattle'
+        }
+    }
+}
+
+Describe 'ConvertTo-MfaCanonicalRegistration' {
+    InModuleScope MFACheckandSteer {
+        It 'creates canonical registration object' {
+            $input = [pscustomobject]@{
+                Id = 'method-id'
+                DisplayName = 'MFA Phone'
+                IsDefault = $true
+                PhoneNumber = '+15551234567'
+                PhoneType = 'mobile'
+                AdditionalProperties = @{
+                    '@odata.type' = '#microsoft.graph.phoneAuthenticationMethod'
+                    deviceId = 'device-1'
+                    createdDateTime = '2025-10-22T00:00:00Z'
+                }
+            }
+
+            $result = ConvertTo-MfaCanonicalRegistration -InputObject $input -UserPrincipalName 'user@contoso.com'
+            $result.RecordType | Should -Be 'Registration'
+            $result.MethodType | Should -Be 'phoneAuthenticationMethod'
+            $result.UserPrincipalName | Should -Be 'user@contoso.com'
+            $result.PhoneNumber | Should -Be '+15551234567'
+        }
+    }
+}
+
 Describe 'Get-MfaEntraSignIn' {
     InModuleScope MFACheckandSteer {
         BeforeEach {
@@ -99,6 +171,22 @@ Describe 'Get-MfaEntraSignIn' {
             $result = Get-MfaEntraSignIn -StartTime $start -EndTime $end -All
             $result.All | Should -BeTrue
         }
+
+        It 'normalizes results when requested' {
+            $start = Get-Date
+            $end = $start.AddMinutes(10)
+            Mock -CommandName Invoke-MfaGraphSignInQuery -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    Id = 'abc'
+                    UserTenantId = 'tenant'
+                    CreatedDateTime = [datetime]'2025-10-23T02:00:00Z'
+                    Status = [pscustomobject]@{ ErrorCode = 0 }
+                }
+            }
+
+            $result = Get-MfaEntraSignIn -StartTime $start -EndTime $end -Normalize
+            $result.RecordType | Should -Be 'SignIn'
+        }
     }
 }
 
@@ -120,6 +208,21 @@ Describe 'Get-MfaEntraRegistration' {
         It 'supports pipeline input' {
             $results = @('a@contoso.com','b@contoso.com') | Get-MfaEntraRegistration
             $results | Should -HaveCount 2
+        }
+
+        It 'normalizes registration results when requested' {
+            Mock -CommandName Invoke-MfaGraphAuthenticationMethodQuery -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    Id = 'method'
+                    AdditionalProperties = @{
+                        '@odata.type' = '#microsoft.graph.fido2AuthenticationMethod'
+                    }
+                }
+            }
+
+            $result = Get-MfaEntraRegistration -UserId 'user@contoso.com' -Normalize
+            $result.RecordType | Should -Be 'Registration'
+            $result.MethodType | Should -Be 'fido2AuthenticationMethod'
         }
     }
 }
