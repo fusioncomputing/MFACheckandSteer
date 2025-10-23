@@ -10,16 +10,34 @@ param(
     [switch] $SkipBetaProfile
 )
 
-$moduleManifest = Join-Path -Path $PSScriptRoot -ChildPath '..\src\MFACheckandSteer.psd1'
+$stepTotal = 5
+$currentStep = 1
 
-Write-Host "Step 1/4: Importing MFA Check & Steer module..." -ForegroundColor Cyan
+$setupScript = Join-Path -Path $PSScriptRoot -ChildPath 'setup.ps1'
+if (Test-Path $setupScript) {
+    Write-Host "Step $currentStep/$stepTotal: Ensuring required modules are installed..." -ForegroundColor Cyan
+    try {
+        & $setupScript
+    }
+    catch {
+        throw "Failed to install required modules: $_"
+    }
+}
+else {
+    Write-Warning "Setup script not found at $setupScript. Proceeding without automatic module installation."
+}
+$currentStep++
+
+$moduleManifest = Join-Path -Path $PSScriptRoot -ChildPath '..\src\MFACheckandSteer.psd1'
+Write-Host "Step $currentStep/$stepTotal: Importing MFA Check & Steer module..." -ForegroundColor Cyan
 if (-not (Test-Path $moduleManifest)) {
     throw "Module manifest not found at $moduleManifest"
 }
 Import-Module $moduleManifest -Force
 Write-Host "Module imported successfully." -ForegroundColor Green
+$currentStep++
 
-Write-Host "Step 2/4: Preparing device code authentication request." -ForegroundColor Cyan
+Write-Host "Step $currentStep/$stepTotal: Preparing device code authentication request." -ForegroundColor Cyan
 Write-Host "Requested Microsoft Graph scopes:" -ForegroundColor Yellow
 $Scopes | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
 if ($SkipBetaProfile) {
@@ -28,8 +46,9 @@ if ($SkipBetaProfile) {
 else {
     Write-Host "Beta profile will be selected after login (required for enriched sign-in details)." -ForegroundColor Yellow
 }
+$currentStep++
 
-Write-Host "Step 3/4: Prompting Global Administrator to complete device login..." -ForegroundColor Cyan
+Write-Host "Step $currentStep/$stepTotal: Prompting Global Administrator to complete device login..." -ForegroundColor Cyan
 Write-Host "Follow the instructions in the console and browser to sign in. Cached credentials will be stored for reuse." -ForegroundColor Magenta
 
 $connectParams = @{
@@ -43,8 +62,9 @@ if ($PSBoundParameters.ContainsKey('Verbose')) {
 }
 
 $context = Connect-MfaGraphDeviceCode @connectParams
+$currentStep++
 
-Write-Host "Step 4/4: Verifying Graph context..." -ForegroundColor Cyan
+Write-Host "Step $currentStep/$stepTotal: Verifying Graph context..." -ForegroundColor Cyan
 
 $tenantId = $null
 $account = $null

@@ -17,7 +17,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 ## Repository Layout
 - `docs/` — Phase 1 discovery artifacts and Phase 2 foundation decisions.
 - `src/` — `MFACheckandSteer` PowerShell module (baseline environment checks).
-- `scripts/` — Setup, smoke-test, and device login helper scripts.
+- `scripts/` — Setup, smoke-test, and device login helper scripts (device login will rerun the setup script to ensure dependencies are present).
 - `tests/` — Pester tests executed locally and in CI.
 - `.github/workflows/` — Windows CI pipeline (`powershell-ci.yml`).
 

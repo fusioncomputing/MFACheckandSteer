@@ -23,7 +23,8 @@ Both functions validate Graph availability via `Get-MgContext` and throw actiona
 Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $Thumbprint
 Select-MgProfile -Name beta
 
-# Or perform a one-time device login with a Global Admin and cached credentials:
+# Or perform a one-time device login with a Global Admin and cached credentials.
+# The helper re-runs scripts/setup.ps1 to install/upgrade the Microsoft.Graph bundle if needed:
 .\scripts\connect-device-login.ps1
 
 # Pull the last 24 hours of sign-ins for a specific user

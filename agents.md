@@ -25,7 +25,7 @@ These notes capture the current repo status, the practical limitations of runnin
 - Keep outputs concise; summarize command results instead of dumping entire logs unless the user explicitly requests the full output.
 
 ## Near-Term Tasks for the Agent
-1. Validate device login helper (`scripts/connect-device-login.ps1`) against production tenants and note any consent prompts or conditional access quirks.
+1. Validate device login helper (`scripts/connect-device-login.ps1`) against production tenants, confirming the setup step installs the Microsoft.Graph bundle when missing; note any consent prompts or conditional access quirks.
 2. Enrich the PowerShell module with Entra MFA ingestion logic (Phase 3) once service principal credentials are available.
 3. Build detection rules and response playbooks aligned with roadmap items 4.x and 5.x.
 4. Expand CI gates (linting, packaging) after the module gains functional commands.
