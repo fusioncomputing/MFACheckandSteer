@@ -40,6 +40,24 @@ $users | ForEach-Object { Get-MfaEntraRegistration -UserPrincipalName $_ -Normal
 - Unit tests mock `Get-MgAuditLogSignIn` and `Get-MgUserAuthenticationMethod` to verify parameter translation and guard clauses.
 - No live Graph calls are executed in CI; smoke tests still ensure module import succeeds.
 
+## Release Planning (Provider vNext)
+- **Provider v1 (current)** — Interactive/device code auth with GA onboarding, sign-in & registration retrieval, canonical normalization, retry resilience, sample datasets.
+- **Provider v1 Acceptance Tests**:
+  - Unit tests validating filter construction, throttling retries, normalization outputs.
+  - Replay script runs (`scripts/replay-samples.ps1 -Dataset All -AsJson`) without error.
+  - Manual smoke: `Get-MfaEntraSignIn` and `Get-MfaEntraRegistration` return data in a sandbox tenant.
+- **Provider v2 Goals** (future roadmap):
+  - Add pagination helpers / chunked processing for large time windows.
+  - Introduce configurable tenant/user filters and exclude lists (e.g., `config/tenant-filters.json`).
+  - Emit structured telemetry (duration, record counts) for health dashboards.
+  - Publish acceptance test suite that mocks pagination and verifies filter configuration.
+- **Release Checklist Template** (store in `docs/guides`):
+  1. Update `Docs` (`phase-3-...` files) with new features or configuration options.
+  2. Add/adjust sample datasets to cover new scenarios.
+  3. Ensure Pester tests cover happy path and failure scenarios; run `Invoke-Pester -CI`.
+  4. Bump module version in `src/MFACheckandSteer.psd1` when breaking/backward-compatible feature toggles are introduced.
+  5. Draft release notes summarizing improvements, risk considerations, and required ops actions.
+
 ## Follow-Up Enhancements
 - Extend canonical schema coverage (e.g., full location metadata, risk detections) as additional connectors are added.
 - Add pagination helpers or chunked processing for large query windows.
