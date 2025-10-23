@@ -20,6 +20,12 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `tests/` — Pester tests executed locally and in CI.
 - `.github/workflows/` — Windows CI pipeline (`powershell-ci.yml`).
 
+## Current PowerShell Commands
+- `Get-MfaEnvironmentStatus` — Report availability and versions of required PowerShell modules.
+- `Test-MfaGraphPrerequisite` — Quick check to confirm Microsoft Graph tooling is installed.
+- `Get-MfaEntraSignIn` — Retrieve Microsoft Entra sign-in logs for a given time window (requires connected Graph context).
+- `Get-MfaEntraRegistration` — Fetch MFA authentication methods for specified users.
+
 ## Next Steps
 - Implement Entra MFA data connectors and schema normalization (roadmap Phase 3).
 - Expand detection rules, response playbooks, and reporting once telemetry is flowing.
