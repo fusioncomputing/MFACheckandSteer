@@ -20,6 +20,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `scripts/` - Setup, smoke-test, sample replay, and device login helper scripts (device login reruns the setup script to ensure dependencies are present).
 - `tests/` - Pester tests executed locally and in CI.
 - `data/samples/` - Synthetic canonical datasets for sign-ins and registrations, used by `scripts/replay-samples.ps1`.
+- `docs/guides/` - Operational playbooks (e.g., Entra tenant onboarding checklist).
 - `.github/workflows/` - Windows CI pipeline (`powershell-ci.yml`).
 
 ## Current PowerShell Commands
