@@ -55,11 +55,78 @@ function ConvertTo-MfaODataDateTime {
     return $DateTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 }
 
+function Test-MfaGraphThrottleError {
+    param(
+        [Parameter(Mandatory)]
+        [System.Management.Automation.ErrorRecord] $ErrorRecord
+    )
+
+    if (-not $ErrorRecord) {
+        return $false
+    }
+
+    $exception = $ErrorRecord.Exception
+    if (-not $exception) {
+        return $false
+    }
+
+    $statusProperties = @('ResponseStatusCode', 'StatusCode', 'ResponseCode')
+    foreach ($prop in $statusProperties) {
+        if ($exception.PSObject.Properties.Name -contains $prop) {
+            $value = $exception.PSObject.Properties[$prop].Value
+            if ($value -eq 429) {
+                return $true
+            }
+        }
+    }
+
+    $message = $exception.Message
+    if ($message -match '429' -or $message -match 'Too\s+Many\s+Requests' -or $message -match 'throttl') {
+        return $true
+    }
+
+    if ($ErrorRecord.FullyQualifiedErrorId -match 'TooManyRequests') {
+        return $true
+    }
+
+    return $false
+}
+
+function Invoke-MfaGraphWithRetry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [scriptblock] $Operation,
+        [int] $MaxRetries = 3,
+        [int] $InitialDelaySeconds = 1
+    )
+
+    $delay = [Math]::Max(1, $InitialDelaySeconds)
+
+    for ($attempt = 0; $attempt -le $MaxRetries; $attempt++) {
+        try {
+            return & $Operation
+        }
+        catch {
+            $errorRecord = $_
+            $shouldRetry = Test-MfaGraphThrottleError -ErrorRecord $errorRecord
+            if (-not $shouldRetry -or $attempt -eq $MaxRetries) {
+                throw
+            }
+
+            Write-Warning ("Microsoft Graph throttled request (attempt {0}/{1}). Retrying in {2} second(s)..." -f ($attempt + 1), ($MaxRetries + 1), $delay)
+            Start-Sleep -Seconds $delay
+            $delay = [Math]::Min($delay * 2, 60)
+        }
+    }
+}
+
 function Invoke-MfaGraphSignInQuery {
     param(
         [string] $Filter,
         [switch] $All,
-        [int] $Top = 200
+        [int] $Top = 200,
+        [int] $MaxRetries = 3
     )
 
     $params = @{
@@ -77,16 +144,21 @@ function Invoke-MfaGraphSignInQuery {
         $params['Filter'] = $Filter
     }
 
-    return Get-MgAuditLogSignIn @params
+    return Invoke-MfaGraphWithRetry -MaxRetries $MaxRetries -Operation {
+        Get-MgAuditLogSignIn @params
+    }
 }
 
 function Invoke-MfaGraphAuthenticationMethodQuery {
     param(
         [Parameter(Mandatory)]
-        [string] $UserId
+        [string] $UserId,
+        [int] $MaxRetries = 3
     )
 
-    return Get-MgUserAuthenticationMethod -UserId $UserId -All
+    return Invoke-MfaGraphWithRetry -MaxRetries $MaxRetries -Operation {
+        Get-MgUserAuthenticationMethod -UserId $UserId -All
+    }
 }
 
 function Connect-MfaGraphDeviceCode {
@@ -340,7 +412,8 @@ function Get-MfaEntraSignIn {
         [string] $UserPrincipalName,
         [int] $Top = 200,
         [switch] $All,
-        [switch] $Normalize
+        [switch] $Normalize,
+        [int] $MaxRetries = 3
     )
 
     if ($EndTime -lt $StartTime) {
@@ -363,7 +436,7 @@ function Get-MfaEntraSignIn {
     }
 
     $filter = ($filterParts -join ' and ')
-    $results = Invoke-MfaGraphSignInQuery -Filter $filter -All:$All.IsPresent -Top $Top
+    $results = Invoke-MfaGraphSignInQuery -Filter $filter -All:$All.IsPresent -Top $Top -MaxRetries $MaxRetries
 
     if ($Normalize) {
         return $results | ConvertTo-MfaCanonicalSignIn
@@ -378,7 +451,8 @@ function Get-MfaEntraRegistration {
         [Parameter(Mandatory, ValueFromPipeline, ValueFromPipelineByPropertyName)]
         [Alias('UserPrincipalName')]
         [string] $UserId,
-        [switch] $Normalize
+        [switch] $Normalize,
+        [int] $MaxRetries = 3
     )
     process {
         $context = Get-MfaGraphContext
@@ -386,7 +460,7 @@ function Get-MfaEntraRegistration {
             throw "Microsoft Graph context not found. Run Connect-MgGraph before calling Get-MfaEntraRegistration."
         }
 
-        $results = Invoke-MfaGraphAuthenticationMethodQuery -UserId $UserId
+        $results = Invoke-MfaGraphAuthenticationMethodQuery -UserId $UserId -MaxRetries $MaxRetries
 
         if ($Normalize) {
             return $results | ConvertTo-MfaCanonicalRegistration -UserPrincipalName $UserId

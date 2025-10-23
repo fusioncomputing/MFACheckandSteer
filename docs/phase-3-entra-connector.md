@@ -11,8 +11,8 @@ This document records the implementation details for roadmap tasks **3.1–3.6**
 ## Functions Added
 | Function | Purpose | Notes |
 |----------|---------|-------|
-| `Get-MfaEntraSignIn` | Fetch sign-in logs with optional user filter and custom date range. | Requires prior `Connect-MgGraph`; supports `-Normalize` to emit canonical records (see `docs/phase-3-canonical-schema.md`). |
-| `Get-MfaEntraRegistration` | Retrieve authentication methods for one or more users. | Wraps `Get-MgUserAuthenticationMethod`; supports `-Normalize` to emit canonical records. |
+| `Get-MfaEntraSignIn` | Fetch sign-in logs with optional user filter and custom date range. | Requires prior `Connect-MgGraph`; supports `-Normalize` for canonical output and `-MaxRetries` (default 3) to automatically retry throttled calls. |
+| `Get-MfaEntraRegistration` | Retrieve authentication methods for one or more users. | Wraps `Get-MgUserAuthenticationMethod`; supports `-Normalize` for canonical output and `-MaxRetries` for throttling resilience. |
 | `Connect-MfaGraphDeviceCode` | Convenience helper that runs Microsoft Graph device login using a Global Admin account. | Selects the beta profile by default after authentication and returns the resulting context. |
 | `ConvertTo-MfaCanonicalSignIn` / `ConvertTo-MfaCanonicalRegistration` | Convert raw Microsoft Graph objects into the canonical schema. | Used internally by `-Normalize`; exposed for advanced pipelines. |
 
@@ -45,3 +45,8 @@ $users | ForEach-Object { Get-MfaEntraRegistration -UserPrincipalName $_ -Normal
 - Add pagination helpers or chunked processing for large query windows.
 - Introduce tenant/user filters driven by configuration files once ingestion pipelines are formalized.
 - Capture telemetry (duration, record counts) for use in future health dashboards.
+
+## Resilience Features
+- Both connector cmdlets route their Microsoft Graph calls through `Invoke-MfaGraphWithRetry`, which performs exponential backoff (1s, 2s, 4s, ...) up to the specified `-MaxRetries` when a 429/throttling response is detected.
+- Retry logic inspects status codes and exception messages so it works with the Graph PowerShell SDK and direct Graph requests alike.
+- Warnings are emitted when a retry occurs, giving operators visibility into throttling events without interrupting automation.

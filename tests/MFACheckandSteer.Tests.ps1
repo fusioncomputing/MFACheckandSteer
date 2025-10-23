@@ -63,6 +63,34 @@ Describe 'Connect-MfaGraphDeviceCode' {
     }
 }
 
+Describe 'Invoke-MfaGraphWithRetry' {
+    InModuleScope MFACheckandSteer {
+        It 'returns result when operation succeeds first try' {
+            $result = Invoke-MfaGraphWithRetry -Operation { 'ok' }
+            $result | Should -Be 'ok'
+        }
+
+        It 'retries when throttled and eventually succeeds' {
+            Mock -CommandName Start-Sleep -ModuleName MFACheckandSteer -MockWith { param($Seconds) }
+            $callCount = [ref]0
+            $result = Invoke-MfaGraphWithRetry -Operation {
+                $callCount.Value++
+                if ($callCount.Value -lt 2) {
+                    throw "StatusCode: 429 Too Many Requests"
+                }
+                'success'
+            }
+
+            $result | Should -Be 'success'
+            Assert-MockCalled Start-Sleep -Times 1 -Scope It
+        }
+
+        It 'does not retry non-throttle errors' {
+            { Invoke-MfaGraphWithRetry -Operation { throw "boom" } } | Should -Throw
+        }
+    }
+}
+
 Describe 'ConvertTo-MfaCanonicalSignIn' {
     InModuleScope MFACheckandSteer {
         It 'creates canonical sign-in object' {
@@ -140,11 +168,12 @@ Describe 'Get-MfaEntraSignIn' {
         BeforeEach {
             Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith { @{ TenantId = 'contoso' } }
             Mock -CommandName Invoke-MfaGraphSignInQuery -ModuleName MFACheckandSteer -MockWith {
-                param($Filter, $All, $Top)
+                param($Filter, $All, $Top, $MaxRetries)
                 [pscustomobject]@{
                     Filter = $Filter
                     All    = $All
                     Top    = $Top
+                    MaxRetries = $MaxRetries
                 }
             }
         }
@@ -170,6 +199,7 @@ Describe 'Get-MfaEntraSignIn' {
             $end = $start.AddMinutes(10)
             $result = Get-MfaEntraSignIn -StartTime $start -EndTime $end -All
             $result.All | Should -BeTrue
+            $result.MaxRetries | Should -Be 3
         }
 
         It 'normalizes results when requested' {
@@ -195,14 +225,18 @@ Describe 'Get-MfaEntraRegistration' {
         BeforeEach {
             Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith { @{ TenantId = 'contoso' } }
             Mock -CommandName Invoke-MfaGraphAuthenticationMethodQuery -ModuleName MFACheckandSteer -MockWith {
-                param($UserId)
-                [pscustomobject]@{ UserId = $UserId }
+                param($UserId, $MaxRetries)
+                [pscustomobject]@{
+                    UserId = $UserId
+                    MaxRetries = $MaxRetries
+                }
             }
         }
 
         It 'invokes Graph query for provided user' {
             $result = Get-MfaEntraRegistration -UserId 'user@contoso.com'
             $result.UserId | Should -Be 'user@contoso.com'
+            $result.MaxRetries | Should -Be 3
         }
 
         It 'supports pipeline input' {
