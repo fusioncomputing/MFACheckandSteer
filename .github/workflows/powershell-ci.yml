@@ -1,0 +1,28 @@
+name: PowerShell CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell 7.4
+        uses: actions/setup-pwsh@v2
+        with:
+          pwsh-version: "7.4"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: ./scripts/setup.ps1
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: Invoke-Pester -Path tests -CI

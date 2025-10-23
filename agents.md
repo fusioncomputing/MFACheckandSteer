@@ -4,7 +4,7 @@ These notes capture the current repo status, the practical limitations of runnin
 
 ## Environment Snapshot
 - Host OS: Windows (PowerShell is the default shell exposed to the agent).
-- Repository: `MFACheckandSteer` (currently empty).
+- Repository: `MFACheckandSteer` now includes Phase 1 documentation and the initial PowerShell module scaffold under `src/`.
 - Harness: Codex CLI with GPT-5 model (`approval_policy=never`, `danger-full-access`, network enabled).
 - File system: NTFS semantics (case-insensitive by default, CRLF newlines common).
 
@@ -25,10 +25,10 @@ These notes capture the current repo status, the practical limitations of runnin
 - Keep outputs concise; summarize command results instead of dumping entire logs unless the user explicitly requests the full output.
 
 ## Near-Term Tasks for the Agent
-1. Draft project scaffolding proposals (language/runtime, directory layout) so the user can confirm a direction before implementation.
-2. Prepare a `.gitattributes` recommendation to manage newline normalization and binary detection.
-3. Outline automation/tooling needs (testing commands, linting, CI approach) with Windows compatibility in mind.
-4. Create contribution guidelines that highlight Windows-friendly workflows (PowerShell command snippets, avoiding unsupported POSIX tooling).
-5. Once requirements are clear, scaffold the initial application structure and include scripts that run identically on Windows and other platforms.
+1. Enrich the PowerShell module with Entra MFA ingestion logic (Phase 3) once service principal credentials are available.
+2. Build detection rules and response playbooks aligned with roadmap items 4.x and 5.x.
+3. Expand CI gates (linting, packaging) after the module gains functional commands.
+4. Maintain documentation parity—update Phase 2 artifacts as tooling evolves and capture lessons learned in `docs/`.
+5. Coordinate with SecOps to integrate KPI dashboards and reporting workflows defined in Phase 5.
 
 Keep this document updated as platform assumptions change or new constraints emerge.
