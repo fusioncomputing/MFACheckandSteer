@@ -470,4 +470,133 @@ function Get-MfaEntraRegistration {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration
+function ConvertTo-MfaDateTime {
+    param(
+        $Value
+    )
+
+    if ($null -eq $Value -or $Value -eq '') {
+        return $null
+    }
+
+    if ($Value -is [datetime]) {
+        return $Value
+    }
+
+    $stringValue = [string]$Value
+    [datetime]$parsed = [datetime]::MinValue
+    if ([datetime]::TryParse($stringValue, [ref]$parsed)) {
+        return $parsed
+    }
+
+    return $null
+}
+
+function Invoke-MfaDetectionDormantMethod {
+    param(
+        [psobject[]] $RegistrationData,
+        [int] $DormantDays = 90,
+        [datetime] $ReferenceTime = (Get-Date)
+    )
+
+    if (-not $RegistrationData) {
+        $RegistrationData = Get-MfaEntraRegistration -Normalize
+    }
+
+    if (-not $RegistrationData) {
+        return @()
+    }
+
+    $cutoff = $ReferenceTime.AddDays(-[math]::Abs($DormantDays))
+
+    $detections = foreach ($record in $RegistrationData) {
+        if (-not $record) { continue }
+        if (-not $record.IsDefault) { continue }
+
+        $lastUpdated = ConvertTo-MfaDateTime -Value $record.LastUpdatedDateTime
+
+        $isDormant = $false
+        if (-not $lastUpdated) {
+            $isDormant = $true
+        }
+        elseif ($lastUpdated -lt $cutoff) {
+            $isDormant = $true
+        }
+
+        if ($isDormant) {
+            [pscustomobject]@{
+                DetectionId          = 'MFA-DET-001'
+                UserPrincipalName    = $record.UserPrincipalName
+                MethodType           = $record.MethodType
+                LastUpdatedDateTime  = $lastUpdated
+                Severity             = 'Medium'
+                Source               = 'Get-MfaEntraRegistration'
+            }
+        }
+    }
+
+    return $detections
+}
+
+function Invoke-MfaDetectionHighRiskSignin {
+    param(
+        [psobject[]] $SignInData,
+        [int] $ObservationHours = 24,
+        [datetime] $ReferenceTime = (Get-Date)
+    )
+
+    if (-not $SignInData) {
+        $start = $ReferenceTime.AddHours(-[math]::Abs($ObservationHours))
+        $SignInData = Get-MfaEntraSignIn -Normalize -StartTime $start -EndTime $ReferenceTime
+    }
+
+    if (-not $SignInData) {
+        return @()
+    }
+
+    $windowStart = $ReferenceTime.AddHours(-[math]::Abs($ObservationHours))
+    $riskDetailsExclude = @('none', 'unknownFutureValue', '')
+
+    $detections = foreach ($record in $SignInData) {
+        if (-not $record) { continue }
+
+        $created = ConvertTo-MfaDateTime -Value $record.CreatedDateTime
+        if (-not $created) {
+            $created = [datetime]::MinValue
+        }
+        if ($created -lt $windowStart -or $created -gt $ReferenceTime) {
+            continue
+        }
+
+        if ($record.Result -ne 'Success') { continue }
+
+        $riskState = $record.RiskState
+        $riskDetail = $record.RiskDetail
+
+        $isRisky = $false
+        if ($riskState -eq 'atRisk') {
+            $isRisky = $true
+        }
+        elseif ($riskDetail -and ($RiskDetailsExclude -notcontains $riskDetail)) {
+            $isRisky = $true
+        }
+
+        if ($isRisky) {
+            [pscustomobject]@{
+                DetectionId          = 'MFA-DET-002'
+                UserPrincipalName    = $record.UserPrincipalName
+                CreatedDateTime      = $created
+                RiskState            = $riskState
+                RiskDetail           = $riskDetail
+                AuthenticationMethods = $record.AuthenticationMethods
+                Severity             = 'High'
+                CorrelationId        = $record.CorrelationId
+                Source               = 'Get-MfaEntraSignIn'
+            }
+        }
+    }
+
+    return $detections
+}
+
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin

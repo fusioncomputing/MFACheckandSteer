@@ -31,6 +31,8 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `Get-MfaEntraSignIn` - Retrieve Microsoft Entra sign-in logs for a given time window (supports `-Normalize` for canonical output and `-MaxRetries` for throttling resilience).
 - `Get-MfaEntraRegistration` - Fetch MFA authentication methods for specified users (supports `-Normalize` and `-MaxRetries`).
 - `ConvertTo-MfaCanonicalSignIn` / `ConvertTo-MfaCanonicalRegistration` - Transform raw Graph objects into the schema described in `docs/phase-3-canonical-schema.md`.
+- `Invoke-MfaDetectionDormantMethod` - Flag default MFA methods that have not been updated recently.
+- `Invoke-MfaDetectionHighRiskSignin` - Surface successful sign-ins that carry Identity Protection risk signals.
 
 ## Sample Data
 - Run `pwsh scripts/replay-samples.ps1` to view the synthetic MFA datasets included under `data/samples/`.

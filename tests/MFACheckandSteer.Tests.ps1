@@ -276,3 +276,89 @@ Describe 'Sample replay script' {
         $parsed.Registrations.Count | Should -Be 2
     }
 }
+
+Describe 'Invoke-MfaDetectionDormantMethod' {
+    It 'flags dormant default methods older than threshold' {
+        $now = Get-Date
+        $data = @(
+            [pscustomobject]@{
+                UserPrincipalName   = 'old@example.com'
+                MethodType          = 'phoneAuthenticationMethod'
+                IsDefault           = $true
+                LastUpdatedDateTime = $now.AddDays(-120).ToString('o')
+            },
+            [pscustomobject]@{
+                UserPrincipalName   = 'fresh@example.com'
+                MethodType          = 'fido2AuthenticationMethod'
+                IsDefault           = $true
+                LastUpdatedDateTime = $now.AddDays(-10).ToString('o')
+            },
+            [pscustomobject]@{
+                UserPrincipalName   = 'secondary@example.com'
+                MethodType          = 'phoneAuthenticationMethod'
+                IsDefault           = $false
+                LastUpdatedDateTime = $now.AddDays(-200).ToString('o')
+            }
+        )
+
+        $results = Invoke-MfaDetectionDormantMethod -RegistrationData $data -DormantDays 90 -ReferenceTime $now
+        $results | Should -HaveCount 1
+        $results[0].UserPrincipalName | Should -Be 'old@example.com'
+        $results[0].DetectionId | Should -Be 'MFA-DET-001'
+    }
+
+    It 'treats missing LastUpdatedDateTime as dormant' {
+        $now = Get-Date
+        $data = @(
+            [pscustomobject]@{
+                UserPrincipalName   = 'unknown@example.com'
+                MethodType          = 'phoneAuthenticationMethod'
+                IsDefault           = $true
+                LastUpdatedDateTime = $null
+            }
+        )
+
+        $results = Invoke-MfaDetectionDormantMethod -RegistrationData $data -DormantDays 30 -ReferenceTime $now
+        $results | Should -HaveCount 1
+    }
+}
+
+Describe 'Invoke-MfaDetectionHighRiskSignin' {
+    It 'flags successful high-risk sign-ins' {
+        $now = Get-Date
+        $data = @(
+            [pscustomobject]@{
+                UserPrincipalName     = 'risk@example.com'
+                Result                = 'Success'
+                CreatedDateTime       = $now.AddMinutes(-15).ToString('o')
+                RiskState             = 'atRisk'
+                RiskDetail            = 'passwordSpray'
+                AuthenticationMethods = 'password;sms'
+                CorrelationId         = 'abc'
+            },
+            [pscustomobject]@{
+                UserPrincipalName     = 'ok@example.com'
+                Result                = 'Success'
+                CreatedDateTime       = $now.AddMinutes(-5).ToString('o')
+                RiskState             = 'none'
+                RiskDetail            = 'none'
+            },
+            [pscustomobject]@{
+                UserPrincipalName     = 'fail@example.com'
+                Result                = 'Failure'
+                CreatedDateTime       = $now.AddMinutes(-5).ToString('o')
+                RiskState             = 'atRisk'
+                RiskDetail            = 'unfamiliarFeaturesOfThisDevice'
+            }
+        )
+
+        $function = (Get-Command Invoke-MfaDetectionHighRiskSignin).ScriptBlock
+        $results = & $function $data 24 $now
+        $results | Should -HaveCount 1
+        $results[0].UserPrincipalName | Should -Be 'risk@example.com'
+        $results[0].DetectionId | Should -Be 'MFA-DET-002'
+    }
+
+    It 'respects risk detail exclusions' -Skip {}
+}
+

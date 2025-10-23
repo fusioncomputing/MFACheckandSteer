@@ -49,6 +49,6 @@ Each rule file will contain:
 - Next steps outlined for implementing the first detection (likely MFA-DET-002 or MFA-DET-004).
 
 ## Next Actions
-1. Create rule spec files for MFA-DET-001 and MFA-DET-002.
-2. Implement detection evaluation helpers in PowerShell that operate on canonical datasets.
-3. Add automated tests ensuring detection functions correctly identify positive and negative cases using sample data.
+1. Extend sample datasets to include positive/negative cases for each detection and integrate with automated regression tests.
+2. Publish rule specs for MFA-DET-003 through MFA-DET-005 following the established template.
+3. Wire detections into reporting outputs (e.g., summary dashboards) and map to response playbooks in Phase 5.
