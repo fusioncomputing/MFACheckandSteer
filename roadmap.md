@@ -1,6 +1,6 @@
 # MFA Check & Steer - Roadmap
 
-## Phase 1 - SecOps Discovery & Charter
+## Phase 1 - SecOps Discovery & Charter (Completed)
 - 1.1 Interview SecOps analysts and incident commanders to capture current MFA triage workflows, toolchains, and pain points.
 - 1.2 Map existing MFA signal sources (Azure AD sign-in logs, conditional access, VPN, custom IdPs, and SIEM exports) and document data retention constraints.
 - 1.3 Define prioritized SecOps outcomes (reduced escalations, faster mean time to revoke compromised factors) and measurable KPIs for success.
@@ -8,7 +8,7 @@
 - 1.5 Produce an agreed charter covering scope boundaries, supported environments (PowerShell-first), and success metrics signed off by stakeholders.
 - 1.6 Establish a stakeholder alignment cadence (bi-weekly SecOps sync, RFC checkpoints) and assign a single charter owner responsible for updating decisions and action items.
 
-## Phase 2 - Foundation & Tooling
+## Phase 2 - Foundation & Tooling (Completed)
 - 2.1 Finalize the technology stack (PowerShell module with optional .NET service components) and directory layout optimized for Windows execution.
 - 2.2 Configure repository automation: `.gitattributes` for line endings, Pester unit test harness, PSScriptAnalyzer linting, Invoke-Formatter formatting, and CI-friendly PowerShell scripts.
 - 2.3 Author developer environment bootstrap scripts (`setup.ps1`) that install prerequisites, import required modules, and validate permissions/certificates.
