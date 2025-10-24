@@ -15,6 +15,7 @@ Quickly contain bursts of MFA denials that typically signal password spraying, M
 - Analyst is authenticated to Microsoft Graph (`Connect-MfaGraphDeviceCode`) unless `-SkipGraphValidation` is used.
 - Detection payload includes the affected user, failure counts, and window timestamps from `Invoke-MfaDetectionRepeatedMfaFailure`.
 - Incident tracking (ticket or case) is available to capture remediation evidence.
+- Operator belongs to the role assignments defined for `MFA-PL-005` in `config/playbooks.json` (export via the `MFA_PLAYBOOK_ROLES` environment variable when running locally).
 
 ## High-Level Steps
 1. **Engage the User** – Confirm with the user (and manager/security contacts) whether the surge of prompts was legitimate or malicious.
@@ -27,6 +28,10 @@ Quickly contain bursts of MFA denials that typically signal password spraying, M
 Use `Invoke-MfaPlaybookContainRepeatedFailure` to orchestrate the containment activities. The output object includes SLA metadata, executed steps, and containment flags that downstream automations can consume.
 
 ```powershell
+if (-not (Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-005')) {
+    throw 'Operator lacks required playbook role.'
+}
+
 $detection = Invoke-MfaDetectionRepeatedMfaFailure -SignInData $signIns | Select-Object -First 1
 Invoke-MfaPlaybookContainRepeatedFailure -Detection $detection -Verbose -WhatIf
 ```

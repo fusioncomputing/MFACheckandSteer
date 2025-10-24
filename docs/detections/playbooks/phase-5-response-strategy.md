@@ -9,9 +9,10 @@ Phase 5 translates detection insights into repeatable remediation. This document
 
 ## Playbook Framework
 1. **Detection Input** – Playbooks accept the detection object (or summary record) returned by the Phase 4 module. This ensures framework tags, SLA data, and severity accompany every remediation run.
-2. **Guardrails** – Each playbook uses `SupportsShouldProcess` with `-WhatIf`/`-Confirm` plus optional `-SkipGraphValidation` switches when needed.
-3. **Logging** – Verbose messages describe each step; output objects summarize the execution plan along with whether the run was simulated.
-4. **Extensibility** – Future playbooks (MFA factor reset, emergency access review, notification workflows) should follow the same pattern for consistency.
+2. **Guardrails** - Each playbook uses `SupportsShouldProcess` with `-WhatIf`/`-Confirm` plus optional `-SkipGraphValidation` switches when needed.
+3. **Role-Based Authorization** - `Test-MfaPlaybookAuthorization` enforces required operator roles defined in `config/playbooks.json`. Operators must populate the `MFA_PLAYBOOK_ROLES` environment variable or supply explicit roles to run remediation.
+4. **Logging** - Verbose messages describe each step; output objects summarize the execution plan along with whether the run was simulated.
+5. **Extensibility** - Future playbooks (MFA factor reset, emergency access review, notification workflows) should follow the same pattern for consistency.
 
 ## Delivered Playbooks
 - **MFA-PL-001 Reset Dormant MFA Method** – `Invoke-MfaPlaybookResetDormantMethod`; documentation in `docs/detections/playbooks/MFA-PL-001-reset-dormant-method.md`.
@@ -28,12 +29,12 @@ Phase 5 translates detection insights into repeatable remediation. This document
 | MFA-PL-008 | Emergency access / break-glass validation | `MFA-DET-003` (extension) | Formalize periodic review and isolation of emergency accounts. |
 
 ## Operational Guidance
-- **Ticketing Integration** – Phase 5 scripts should emit objects that downstream tools (ServiceNow, Jira, Teams webhooks) can consume. Integrations will be added iteratively.
-- **Documentation** – Each playbook receives a Markdown spec capturing purpose, prerequisites, and manual fallback procedures.
-- **Testing** – Add scenario coverage (where practical) to `tests/MFACheckandSteer.Tests.ps1` so playbooks remain stable.
-- **Change Control** – Update the controls catalog (Phase 4.6) whenever SLA expectations shift due to new automation.
+- **Ticketing Integration** - Phase 5 scripts should emit objects that downstream tools (ServiceNow, Jira, Teams webhooks) can consume. Integrations will be added iteratively.
+- **Documentation** - Each playbook receives a Markdown spec capturing purpose, prerequisites, and manual fallback procedures.
+- **Testing** - Add scenario coverage (where practical) to `tests/MFACheckandSteer.Tests.ps1` so playbooks remain stable.
+- **Change Control** - Update the controls catalog (Phase 4.6) whenever SLA expectations shift due to new automation.
+- **Authorization Policy** - Adjust `config/playbooks.json` when team assignments change and distribute updated guidance on setting `MFA_PLAYBOOK_ROLES` for operators.
 
 ## Future Enhancements
-- Role-based execution controls (limiting high-impact actions to specific operators).
 - Automated notification templates (email/chat) referencing detection metadata.
 - Integration with device remediation workflows for compromised endpoints.

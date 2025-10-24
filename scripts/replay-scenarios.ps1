@@ -126,6 +126,7 @@ if ($SimulatePlaybooks) {
 
         $commonArgs = @{
             Detection           = $detection
+            SkipAuthorization   = $true
             SkipGraphValidation = $true
             WhatIf              = $true
             Verbose             = $false
@@ -156,7 +157,7 @@ if ($SimulatePlaybooks) {
 
     foreach ($score in $scores) {
         if (-not $score) { continue }
-        $plan = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -WhatIf -Verbose:$false
+        $plan = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -SkipAuthorization -WhatIf -Verbose:$false
         if ($plan) {
             $playbookPlans += @($plan)
         }

@@ -1,5 +1,8 @@
 Import-Module "$PSScriptRoot/../src/MFACheckandSteer.psd1" -Force
 
+$script:OriginalPlaybookRoles = [Environment]::GetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'Process')
+[Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'SecOps-IAM,SecOps-IR,SecOps-ThreatHunting,SecOps-Triage', 'Process')
+
 BeforeAll {
     if (-not (Get-Command -Name Select-MgProfile -ErrorAction SilentlyContinue)) {
         function Select-MgProfile {
@@ -275,6 +278,13 @@ Describe 'Sample replay script' {
         $parsed = $json | ConvertFrom-Json
         $parsed.Registrations.Count | Should -Be 3
     }
+}
+
+if ($null -ne $script:OriginalPlaybookRoles) {
+    [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $script:OriginalPlaybookRoles, 'Process')
+}
+else {
+    [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $null, 'Process')
 }
 
 Describe 'Get-MfaDetectionConfiguration' {
@@ -861,6 +871,30 @@ Describe 'Invoke-MfaDetectionPrivilegedRoleNoMfa' {
     }
 }
 
+Describe 'Test-MfaPlaybookAuthorization' {
+    It 'throws when required roles are missing' {
+        $original = [Environment]::GetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'Process')
+        [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', '', 'Process')
+        try {
+            { Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-002' } | Should -Throw
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $original, 'Process')
+        }
+    }
+
+    It 'returns true when required roles are present' {
+        $original = [Environment]::GetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'Process')
+        [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'SecOps-IR', 'Process')
+        try {
+            Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-002' | Should -BeTrue
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $original, 'Process')
+        }
+    }
+}
+
 Describe 'Invoke-MfaPlaybookResetDormantMethod' {
     InModuleScope MFACheckandSteer {
         BeforeEach {
@@ -880,7 +914,7 @@ Describe 'Invoke-MfaPlaybookResetDormantMethod' {
                 Severity          = 'Medium'
             }
 
-            $result = Invoke-MfaPlaybookResetDormantMethod -Detection $detection -Verbose:$false -WhatIf
+            $result = Invoke-MfaPlaybookResetDormantMethod -Detection $detection -SkipAuthorization -Verbose:$false -WhatIf
             $result.PlaybookId | Should -Be 'MFA-PL-001'
             $result.UserPrincipalName | Should -Be 'user@example.com'
             $result.ExecutedSteps | Should -Contain 'Notify user'
@@ -903,7 +937,7 @@ Describe 'Invoke-MfaPlaybookResetDormantMethod' {
                 MethodType        = 'phoneAuthenticationMethod'
             }
 
-            $result = Invoke-MfaPlaybookResetDormantMethod -Detection $detection -SkipGraphValidation -NoUserNotification -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookResetDormantMethod -Detection $detection -SkipAuthorization -SkipGraphValidation -NoUserNotification -WhatIf -Verbose:$false
             $result.GraphValidated | Should -BeFalse
             $result.NotificationsSent | Should -BeFalse
         }
@@ -931,7 +965,7 @@ Describe 'Invoke-MfaPlaybookContainHighRiskSignin' {
                 RiskDetail        = 'passwordSpray'
             }
 
-            $result = Invoke-MfaPlaybookContainHighRiskSignin -Detection $detection -Verbose:$false -WhatIf
+            $result = Invoke-MfaPlaybookContainHighRiskSignin -Detection $detection -SkipAuthorization -Verbose:$false -WhatIf
             $result.PlaybookId | Should -Be 'MFA-PL-002'
             $result.UserPrincipalName | Should -Be 'risk@example.com'
             $result.ExecutedSteps | Should -Contain 'Revoke sessions'
@@ -948,7 +982,7 @@ Describe 'Invoke-MfaPlaybookContainHighRiskSignin' {
                 UserPrincipalName = 'risk2@example.com'
             }
 
-            $result = Invoke-MfaPlaybookContainHighRiskSignin -Detection $detection -SkipGraphValidation -NoUserNotification -NoTicketUpdate -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookContainHighRiskSignin -Detection $detection -SkipAuthorization -SkipGraphValidation -NoUserNotification -NoTicketUpdate -WhatIf -Verbose:$false
             $result.GraphValidated | Should -BeFalse
             $result.NotificationsSent | Should -BeFalse
             $result.TicketUpdated | Should -BeFalse
@@ -987,7 +1021,7 @@ Describe 'Invoke-MfaPlaybookContainRepeatedFailure' {
                 Severity             = 'Medium'
             }
 
-            $result = Invoke-MfaPlaybookContainRepeatedFailure -Detection $detection -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookContainRepeatedFailure -Detection $detection -SkipAuthorization -WhatIf -Verbose:$false
             $result.PlaybookId | Should -Be 'MFA-PL-005'
             $result.DetectionId | Should -Be 'MFA-DET-004'
             $result.UserPrincipalName | Should -Be 'burst@example.com'
@@ -1007,7 +1041,7 @@ Describe 'Invoke-MfaPlaybookContainRepeatedFailure' {
                 FailureCount      = 3
             }
 
-            $result = Invoke-MfaPlaybookContainRepeatedFailure -Detection $detection -SkipGraphValidation -NoUserNotification -NoTicketUpdate -NoUserBlock -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookContainRepeatedFailure -Detection $detection -SkipAuthorization -SkipGraphValidation -NoUserNotification -NoTicketUpdate -NoUserBlock -WhatIf -Verbose:$false
             $result.GraphValidated | Should -BeFalse
             $result.NotificationsSent | Should -BeFalse
             $result.TicketUpdated | Should -BeFalse
@@ -1043,7 +1077,7 @@ Describe 'Invoke-MfaPlaybookInvestigateImpossibleTravel' {
                 Severity           = 'High'
             }
 
-            $result = Invoke-MfaPlaybookInvestigateImpossibleTravel -Detection $detection -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookInvestigateImpossibleTravel -Detection $detection -SkipAuthorization -WhatIf -Verbose:$false
             $result.PlaybookId | Should -Be 'MFA-PL-006'
             $result.DetectionId | Should -Be 'MFA-DET-005'
             $result.UserPrincipalName | Should -Be 'traveler@example.com'
@@ -1063,7 +1097,7 @@ Describe 'Invoke-MfaPlaybookInvestigateImpossibleTravel' {
                 UserPrincipalName  = 'skip@example.com'
             }
 
-            $result = Invoke-MfaPlaybookInvestigateImpossibleTravel -Detection $detection -SkipGraphValidation -NoUserNotification -NoTicketUpdate -NoSessionRevocation -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookInvestigateImpossibleTravel -Detection $detection -SkipAuthorization -SkipGraphValidation -NoUserNotification -NoTicketUpdate -NoSessionRevocation -WhatIf -Verbose:$false
             $result.GraphValidated | Should -BeFalse
             $result.SessionsRevoked | Should -BeFalse
             $result.NotificationsSent | Should -BeFalse
@@ -1088,7 +1122,7 @@ Describe 'Invoke-MfaPlaybookTriageSuspiciousScore' {
                 )
             }
 
-            $result = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -SkipAuthorization -WhatIf -Verbose:$false
             $result.PlaybookId | Should -Be 'MFA-PL-004'
             $result.ExecutedSteps | Should -Contain 'Review indicators'
             $result.RecommendedAction | Should -Be 'Launch MFA-PL-002 containment'
@@ -1104,7 +1138,7 @@ Describe 'Invoke-MfaPlaybookTriageSuspiciousScore' {
                 Indicators        = @()
             }
 
-            $result = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -NoTicketUpdate -WhatIf -Verbose:$false
+            $result = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -SkipAuthorization -NoTicketUpdate -WhatIf -Verbose:$false
             $result.TicketUpdated | Should -BeFalse
             $result.SkippedSteps | Should -Contain 'Update ticket'
             $result.RecommendedAction | Should -Be 'Monitor'
@@ -1209,6 +1243,7 @@ Describe 'Incident scenarios' {
 
                 $commonArgs = @{
                     Detection           = $detection
+                    SkipAuthorization   = $true
                     SkipGraphValidation = $true
                     WhatIf              = $true
                     Verbose             = $false
@@ -1230,7 +1265,7 @@ Describe 'Incident scenarios' {
 
             foreach ($score in $scores) {
                 if (-not $score) { continue }
-                $triage = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -WhatIf -Verbose:$false
+                $triage = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -SkipAuthorization -WhatIf -Verbose:$false
                 if ($triage) {
                     $playbookPlans += @($triage)
                 }

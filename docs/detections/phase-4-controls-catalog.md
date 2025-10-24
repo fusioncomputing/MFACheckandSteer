@@ -28,6 +28,7 @@ Roadmap task **4.6** formalizes the operational expectations tied to each detect
 
 ## Implementation Notes
 - SLA metadata lives alongside existing framework and reporting tags in the PowerShell module, ensuring parity between documentation and runtime behavior.
+- Playbook execution enforces role-based access via `Test-MfaPlaybookAuthorization` and `config/playbooks.json`; ensure operator role mappings stay in sync with the catalog.
 - `Get-MfaDetectionConfiguration` can be extended later to support per-control SLA overrides if stakeholders request flexibility.
 - Reporting dashboards (Phase 6) should surface SLA adherence metrics to track continuous improvement.
 

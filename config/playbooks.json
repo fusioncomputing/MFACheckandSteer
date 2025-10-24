@@ -1,0 +1,32 @@
+{
+  "MFA-PL-001": {
+    "RequiredRoles": [
+      "SecOps-IAM"
+    ]
+  },
+  "MFA-PL-002": {
+    "RequiredRoles": [
+      "SecOps-IR"
+    ]
+  },
+  "MFA-PL-003": {
+    "RequiredRoles": [
+      "SecOps-IAM"
+    ]
+  },
+  "MFA-PL-004": {
+    "RequiredRoles": [
+      "SecOps-Triage"
+    ]
+  },
+  "MFA-PL-005": {
+    "RequiredRoles": [
+      "SecOps-IR"
+    ]
+  },
+  "MFA-PL-006": {
+    "RequiredRoles": [
+      "SecOps-ThreatHunting"
+    ]
+  }
+}

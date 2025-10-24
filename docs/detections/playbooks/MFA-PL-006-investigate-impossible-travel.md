@@ -15,6 +15,7 @@ Investigate successful MFA sign-ins that occur from distant geographies within m
 - Analyst has an active Microsoft Graph session (`Connect-MfaGraphDeviceCode`) unless `-SkipGraphValidation` is used.
 - Detection payload includes country/region, timestamps, and IP address metadata from `Invoke-MfaDetectionImpossibleTravelSuccess`.
 - Threat hunting has access to supporting telemetry (Defender, Sentinel, SIEM) for deeper correlation.
+- Operator belongs to the role assignments defined for `MFA-PL-006` in `config/playbooks.json` (exposed locally via the `MFA_PLAYBOOK_ROLES` environment variable).
 
 ## High-Level Steps
 1. **Validate with the User** – Confirm whether the user legitimately travelled or recognizes the activity; escalate immediately if suspicious.
@@ -28,6 +29,10 @@ Investigate successful MFA sign-ins that occur from distant geographies within m
 Run `Invoke-MfaPlaybookInvestigateImpossibleTravel` to execute the investigation workflow. The output includes execution/skip flags, SLA metadata, and sign-in context useful for dashboards or ticket enrichment.
 
 ```powershell
+if (-not (Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-006')) {
+    throw 'Operator lacks required playbook role.'
+}
+
 $detection = Invoke-MfaDetectionImpossibleTravelSuccess -SignInData $signIns | Select-Object -First 1
 Invoke-MfaPlaybookInvestigateImpossibleTravel -Detection $detection -Verbose -WhatIf
 ```

@@ -21,7 +21,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `tests/` - Pester tests executed locally and in CI.
 - `data/samples/` - Synthetic canonical datasets for sign-ins and registrations, used by `scripts/replay-samples.ps1`.
 - `data/scenarios/` - Incident-focused telemetry bundles exercised by `scripts/replay-scenarios.ps1` and Pester scenario tests.
-- `config/` - Detection configuration (`detections.json`) that applies Phase 4.5 overrides for thresholds and risk tuning.
+- `config/` - Detection configuration (`detections.json`) that applies Phase 4.5 overrides for thresholds and risk tuning, plus playbook policy (`playbooks.json`) that defines required operator roles.
 - `docs/guides/` - Operational playbooks (e.g., Entra tenant onboarding checklist).
 - `docs/detections/` - Detection strategy, rule specs, framework/tag mappings, and future playbooks/tests (Phase 4).
 - `.github/workflows/` - Windows CI pipeline (`powershell-ci.yml`).
@@ -40,6 +40,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `Invoke-MfaDetectionPrivilegedRoleNoMfa` - Identify privileged identities lacking compliant MFA coverage.
 - `Invoke-MfaSuspiciousActivityScore` - Correlate impossible travel, repeated failures, unusual devices, and recent factor changes into a per-user priority score.
 - `Get-MfaDetectionConfiguration` - Inspect the merged detection configuration (defaults plus overrides) used by Phase 4.5 tuning.
+- `Test-MfaPlaybookAuthorization` - Verify the current operator satisfies the role policy for a playbook before execution.
 - `Invoke-MfaPlaybookResetDormantMethod` - Apply playbook `MFA-PL-001` to revoke stale factors identified by `MFA-DET-001` with guardrails and audit-friendly output.
 - `Invoke-MfaPlaybookEnforcePrivilegedRoleMfa` - Apply playbook `MFA-PL-003` to restore compliant MFA coverage for privileged identities.
 - `Invoke-MfaPlaybookContainHighRiskSignin` - Apply playbook `MFA-PL-002` to contain successful risky sign-ins identified by `MFA-DET-002`.
@@ -59,6 +60,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - Edit `config/detections.json` to tune detection thresholds (e.g., `DormantDays`, suspicious activity scoring windows) following the guidance in `docs/detections/phase-4-configuration.md`.
 - Run `Get-MfaDetectionConfiguration` (optionally with `-Refresh`) to confirm effective settings; overrides apply automatically unless cmdlet parameters are provided at call time.
 - Set the `MfaDetectionConfigurationPath` environment variable to point at an alternate JSON file when testing changes or running scenario-specific baselines.
+- Review and adjust `config/playbooks.json` to align required roles with your operational teams. Set the `MFA_PLAYBOOK_ROLES` environment variable (comma- or semicolon-delimited) for operators so `Test-MfaPlaybookAuthorization` can validate access before remediation runs.
 
 - Review `docs/detections/playbooks/phase-5-response-strategy.md` for the Phase 5 remediation playbook approach and the individual playbook specs under `docs/detections/playbooks/` (MFA-PL-001 through MFA-PL-006).
 

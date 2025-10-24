@@ -535,6 +535,37 @@ $script:MfaDetectionDefaultConfig = @{
     }
 }
 
+$script:MfaPlaybookDefaultPolicy = @{
+    'MFA-PL-001' = @{
+        RequiredRoles = @('SecOps-IAM')
+    }
+    'MFA-PL-002' = @{
+        RequiredRoles = @('SecOps-IR')
+    }
+    'MFA-PL-003' = @{
+        RequiredRoles = @('SecOps-IAM')
+    }
+    'MFA-PL-004' = @{
+        RequiredRoles = @('SecOps-Triage')
+    }
+    'MFA-PL-005' = @{
+        RequiredRoles = @('SecOps-IR')
+    }
+    'MFA-PL-006' = @{
+        RequiredRoles = @('SecOps-ThreatHunting')
+    }
+}
+
+function Get-MfaPlaybookPolicyPath {
+    $customPath = [Environment]::GetEnvironmentVariable('MfaPlaybookPolicyPath', 'Process')
+    if (-not $customPath) {
+        $moduleRoot = Split-Path -Parent $PSScriptRoot
+        $customPath = Join-Path -Path $moduleRoot -ChildPath 'config/playbooks.json'
+    }
+
+    return $customPath
+}
+
 function Get-MfaDetectionConfigPath {
     $customPath = [Environment]::GetEnvironmentVariable('MfaDetectionConfigurationPath', 'Process')
     if (-not $customPath) {
@@ -741,6 +772,144 @@ function Get-MfaDetectionConfiguration {
     }
 
     return $script:MfaDetectionConfigCache
+}
+
+$script:MfaPlaybookPolicyCache = $null
+
+function Initialize-MfaPlaybookPolicy {
+    $effective = @{}
+    foreach ($entry in $script:MfaPlaybookDefaultPolicy.GetEnumerator()) {
+        $effective[$entry.Key] = @{}
+        foreach ($key in $entry.Value.Keys) {
+            $effective[$entry.Key][$key] = $entry.Value[$key]
+        }
+    }
+
+    $path = Get-MfaPlaybookPolicyPath
+    if (Test-Path $path) {
+        try {
+            $raw = Get-Content -Path $path -Raw
+            if ($raw) {
+                $overrides = ConvertFrom-Json -InputObject $raw -AsHashtable
+                foreach ($policyEntry in $overrides.GetEnumerator()) {
+                    $playbookId = [string]$policyEntry.Key
+                    $definition = $policyEntry.Value
+                    if (-not $effective.ContainsKey($playbookId)) {
+                        $effective[$playbookId] = @{}
+                    }
+
+                    foreach ($property in $definition.GetEnumerator()) {
+                        $name = [string]$property.Key
+                        $value = $property.Value
+                        switch ($name) {
+                            'RequiredRoles' {
+                                $roles = @()
+                                if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) {
+                                    foreach ($role in $value) {
+                                        if ($role) { $roles += [string]$role }
+                                    }
+                                }
+                                elseif ($value) {
+                                    $roles += [string]$value
+                                }
+                                if ($roles.Count -gt 0) {
+                                    $effective[$playbookId]['RequiredRoles'] = $roles
+                                }
+                            }
+                            default {
+                                $effective[$playbookId][$name] = $value
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Warning "Failed to parse playbook policy file at '$path'. Using defaults. Error: $($_.Exception.Message)"
+        }
+    }
+
+    $script:MfaPlaybookPolicyCache = @{}
+    foreach ($entry in $effective.GetEnumerator()) {
+        $script:MfaPlaybookPolicyCache[$entry.Key] = [pscustomobject]$entry.Value
+    }
+}
+
+function Get-MfaPlaybookPolicy {
+    [CmdletBinding()]
+    param(
+        [string] $PlaybookId,
+        [switch] $Refresh
+    )
+
+    if ($Refresh -or -not $script:MfaPlaybookPolicyCache) {
+        Initialize-MfaPlaybookPolicy
+    }
+
+    if ($PlaybookId) {
+        if ($script:MfaPlaybookPolicyCache.ContainsKey($PlaybookId)) {
+            return $script:MfaPlaybookPolicyCache[$PlaybookId]
+        }
+        return $null
+    }
+
+    return $script:MfaPlaybookPolicyCache
+}
+
+function Get-MfaPlaybookCurrentRoles {
+    param(
+        [string[]] $ExplicitRoles
+    )
+
+    if ($ExplicitRoles) {
+        return @($ExplicitRoles | Where-Object { $_ }) | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+    }
+
+    $raw = [Environment]::GetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'Process')
+    if (-not $raw) {
+        $raw = [Environment]::GetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'Machine')
+    }
+
+    if (-not $raw) {
+        return @()
+    }
+
+    return @($raw -split '[,;]' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+function Test-MfaPlaybookAuthorization {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $PlaybookId,
+        [string[]] $UserRoles,
+        [switch] $WarnOnly
+    )
+
+    $policy = Get-MfaPlaybookPolicy -PlaybookId $PlaybookId
+    $requiredRoles = @()
+    if ($policy -and $policy.PSObject.Properties.Name -contains 'RequiredRoles') {
+        $requiredRoles = @($policy.RequiredRoles | Where-Object { $_ })
+    }
+
+    if (-not $requiredRoles -or $requiredRoles.Count -eq 0) {
+        return $true
+    }
+
+    $roles = Get-MfaPlaybookCurrentRoles -ExplicitRoles $UserRoles
+    $missing = @($requiredRoles | Where-Object { $_ -notin $roles })
+
+    if ($missing.Count -gt 0) {
+        $message = "Operator lacks required playbook role(s) for $PlaybookId. Missing: $($missing -join ', '). Set MFA_PLAYBOOK_ROLES or update playbook policy."
+        if ($WarnOnly) {
+            Write-Warning $message
+            return $false
+        }
+
+        throw $message
+    }
+
+    return $true
 }
 
 $script:MfaDetectionMetadata = $null
@@ -1779,11 +1948,15 @@ function Invoke-MfaPlaybookResetDormantMethod {
         [Parameter(Mandatory, ValueFromPipeline)]
         [psobject] $Detection,
 
+        [switch] $SkipAuthorization,
         [switch] $SkipGraphValidation,
         [switch] $NoUserNotification
     )
 
     begin {
+        if (-not $SkipAuthorization) {
+            Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-001' | Out-Null
+        }
         $results = @()
     }
 
@@ -1885,12 +2058,16 @@ function Invoke-MfaPlaybookEnforcePrivilegedRoleMfa {
         [Parameter(Mandatory, ValueFromPipeline)]
         [psobject] $Detection,
 
+        [switch] $SkipAuthorization,
         [switch] $SkipGraphValidation,
         [switch] $NoUserNotification,
         [switch] $NoTicketUpdate
     )
 
     begin {
+        if (-not $SkipAuthorization) {
+            Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-003' | Out-Null
+        }
         $results = @()
     }
 
@@ -2048,12 +2225,16 @@ function Invoke-MfaPlaybookContainHighRiskSignin {
         [Parameter(Mandatory, ValueFromPipeline)]
         [psobject] $Detection,
 
+        [switch] $SkipAuthorization,
         [switch] $SkipGraphValidation,
         [switch] $NoUserNotification,
         [switch] $NoTicketUpdate
     )
 
     begin {
+        if (-not $SkipAuthorization) {
+            Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-002' | Out-Null
+        }
         $results = @()
     }
 
@@ -2200,6 +2381,7 @@ function Invoke-MfaPlaybookContainRepeatedFailure {
         [Parameter(Mandatory, ValueFromPipeline)]
         [psobject] $Detection,
 
+        [switch] $SkipAuthorization,
         [switch] $SkipGraphValidation,
         [switch] $NoUserNotification,
         [switch] $NoTicketUpdate,
@@ -2207,6 +2389,9 @@ function Invoke-MfaPlaybookContainRepeatedFailure {
     )
 
     begin {
+        if (-not $SkipAuthorization) {
+            Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-005' | Out-Null
+        }
         $results = @()
     }
 
@@ -2362,6 +2547,7 @@ function Invoke-MfaPlaybookInvestigateImpossibleTravel {
         [Parameter(Mandatory, ValueFromPipeline)]
         [psobject] $Detection,
 
+        [switch] $SkipAuthorization,
         [switch] $SkipGraphValidation,
         [switch] $NoUserNotification,
         [switch] $NoTicketUpdate,
@@ -2369,6 +2555,9 @@ function Invoke-MfaPlaybookInvestigateImpossibleTravel {
     )
 
     begin {
+        if (-not $SkipAuthorization) {
+            Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-006' | Out-Null
+        }
         $results = @()
     }
 
@@ -2537,10 +2726,14 @@ function Invoke-MfaPlaybookTriageSuspiciousScore {
         [Parameter(Mandatory, ValueFromPipeline)]
         [psobject] $Score,
 
+        [switch] $SkipAuthorization,
         [switch] $NoTicketUpdate
     )
 
     begin {
+        if (-not $SkipAuthorization) {
+            Test-MfaPlaybookAuthorization -PlaybookId 'MFA-PL-004' | Out-Null
+        }
         $results = @()
     }
 
@@ -2669,4 +2862,4 @@ function Invoke-MfaPlaybookTriageSuspiciousScore {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore
