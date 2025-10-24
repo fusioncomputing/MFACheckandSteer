@@ -3894,8 +3894,69 @@ function New-MfaHtmlReport {
     $null = $sb.AppendLine("<h2>Detections ({0})</h2>" -f $detCollection.Count)
     if ($detCollection.Count -gt 0) {
         $null = $sb.AppendLine('<table>')
-        $null = $sb.AppendLine('<thead><tr><th>Detection ID</th><th>User</th><th>Severity</th><th>Control Owner</th><th>Response SLA (hrs)</th></tr></thead>')
+        $null = $sb.AppendLine('<thead><tr><th>Detection ID</th><th>User</th><th>Severity</th><th>Control Owner</th><th>Response SLA (hrs)</th><th>Details</th></tr></thead>')
         $null = $sb.AppendLine('<tbody>')
+        $detectionDetails = {
+            param($det)
+
+            if ($det.PSObject.Properties['Summary'] -and $det.Summary) {
+                return [string]$det.Summary
+            }
+
+            if ($det.PSObject.Properties['Score'] -and $det.Score) {
+                $scoreText = "Suspicious activity score: {0}" -f $det.Score
+                $indicatorNames = @()
+                if ($det.PSObject.Properties['Indicators'] -and $det.Indicators) {
+                    foreach ($indicator in @($det.Indicators)) {
+                        if (-not $indicator) { continue }
+                        if ($indicator.PSObject.Properties['Type'] -and $indicator.Type) {
+                            $indicatorNames += [string]$indicator.Type
+                        }
+                        elseif ($indicator -is [string]) {
+                            $indicatorNames += [string]$indicator
+                        }
+                    }
+                }
+
+                $indicatorNames = @($indicatorNames | Where-Object { $_ }) | Sort-Object -Unique
+                if ($indicatorNames.Count -gt 0) {
+                    return ("{0}. Signals: {1}" -f $scoreText, ($indicatorNames -join ', '))
+                }
+
+                return $scoreText
+            }
+
+            if ($det.PSObject.Properties['FailureReasons'] -and $det.FailureReasons) {
+                $reasons = @($det.FailureReasons)
+                if ($reasons.Count -gt 0) {
+                    $flat = (($reasons -join ';') -split ';') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                    if ($flat) {
+                        return ("Failure reasons: {0}" -f ((@($flat | Sort-Object -Unique)) -join ', '))
+                    }
+                }
+            }
+
+            if ($det.PSObject.Properties['MethodType'] -and $det.MethodType) {
+                if ($det.PSObject.Properties['LastUpdatedDateTime'] -and $det.LastUpdatedDateTime) {
+                    $parsed = ConvertTo-MfaDateTime -Value $det.LastUpdatedDateTime
+                    if ($parsed) {
+                        return ("Method {0} last updated {1:u}" -f $det.MethodType, $parsed)
+                    }
+                }
+                return ("Method {0} flagged for review" -f $det.MethodType)
+            }
+
+            if ($det.PSObject.Properties['RiskDetail'] -and $det.RiskDetail) {
+                return ("Risk detail: {0}" -f $det.RiskDetail)
+            }
+
+            if ($det.PSObject.Properties['CorrelationId'] -and $det.CorrelationId) {
+                return ("Correlation ID: {0}" -f $det.CorrelationId)
+            }
+
+            return ''
+        }
+
         foreach ($det in $detCollection) {
             $severity = if ($det.PSObject.Properties['Severity']) { [string]$det.Severity } else { '' }
             $class = switch ($severity.ToLowerInvariant()) {
@@ -3904,18 +3965,36 @@ function New-MfaHtmlReport {
                 'medium' { 'sev-medium' }
                 default { 'sev-low' }
             }
-            $detectionId = if ($det.PSObject.Properties['DetectionId']) { [string]$det.DetectionId } else { '' }
+            $detectionId = ''
+            if ($det.PSObject.Properties['DetectionId'] -and $det.DetectionId) {
+                $detectionId = [string]$det.DetectionId
+            }
+            elseif ($det.PSObject.Properties['SignalId'] -and $det.SignalId) {
+                $detectionId = [string]$det.SignalId
+            }
+            elseif ($det.PSObject.Properties['Source'] -and $det.Source) {
+                $detectionId = [string]$det.Source
+            }
+            elseif ($det.PSObject.Properties['RecordType'] -and $det.RecordType) {
+                $detectionId = [string]$det.RecordType
+            }
+
             $user = if ($det.PSObject.Properties['UserPrincipalName']) { [string]$det.UserPrincipalName } else { '' }
             $controlOwner = if ($det.PSObject.Properties['ControlOwner']) { [string]$det.ControlOwner } else { '' }
             $sla = if ($det.PSObject.Properties['ResponseSlaHours']) { [string]$det.ResponseSlaHours } else { '' }
+            $detailText = & $detectionDetails $det
+            if (-not $detailText) {
+                $detailText = 'Additional context not supplied.'
+            }
 
-            $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td></tr>" -f
+            $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td><td>{6}</td></tr>" -f
                 $class,
                 (& $encode $detectionId),
                 (& $encode $user),
                 (& $encode $severity),
                 (& $encode $controlOwner),
-                (& $encode $sla)
+                (& $encode $sla),
+                (& $encode $detailText)
             ))
         }
         $null = $sb.AppendLine('</tbody></table>')
