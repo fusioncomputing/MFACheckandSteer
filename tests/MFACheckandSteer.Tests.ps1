@@ -2,6 +2,7 @@ Import-Module "$PSScriptRoot/../src/MFACheckandSteer.psd1" -Force
 
 $script:OriginalPlaybookRoles = [Environment]::GetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'Process')
 [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', 'SecOps-IAM,SecOps-IR,SecOps-ThreatHunting,SecOps-Triage', 'Process')
+$script:OriginalIntegrationConfigPath = [Environment]::GetEnvironmentVariable('MfaIntegrationConfigurationPath', 'Process')
 
 BeforeAll {
     if (-not (Get-Command -Name Select-MgProfile -ErrorAction SilentlyContinue)) {
@@ -280,12 +281,322 @@ Describe 'Sample replay script' {
     }
 }
 
+Describe 'Get-MfaIntegrationConfig' {
+    InModuleScope MFACheckandSteer {
+        It 'returns defaults when configuration file is missing' {
+            $path = Join-Path -Path $TestDrive -ChildPath 'missing-integrations.json'
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $path, 'Process')
+                $config = Get-MfaIntegrationConfig -Area 'Ticketing' -Refresh
+                $config | Should -Not -BeNullOrEmpty
+                $config.Provider | Should -Be 'Generic'
+                $config.DefaultAssignmentGroup | Should -Be 'SecOps-MFA'
+                $config.FallbackPath | Should -Be 'tickets/outbox'
+            }
+            finally {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+
+        It 'merges overrides defined in configuration file' {
+            $path = Join-Path -Path $TestDrive -ChildPath 'integration-overrides.json'
+            @{
+                Ticketing = @{
+                    Provider               = 'ServiceNow'
+                    DefaultAssignmentGroup = 'IAM-Response'
+                    Endpoint               = 'https://example.com/api/tickets'
+                }
+                Notifications = @{
+                    Provider     = 'Teams'
+                    FallbackPath = 'notifications/custom'
+                }
+            } | ConvertTo-Json -Depth 5 | Set-Content -Path $path -Encoding UTF8
+
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $path, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+
+                $ticketing = Get-MfaIntegrationConfig -Area 'Ticketing'
+                $notifications = Get-MfaIntegrationConfig -Area 'Notifications'
+                $metadata = (Get-MfaIntegrationConfig)['__Metadata']
+
+                $ticketing.Provider | Should -Be 'ServiceNow'
+                $ticketing.Endpoint | Should -Be 'https://example.com/api/tickets'
+                $ticketing.DefaultAssignmentGroup | Should -Be 'IAM-Response'
+                $notifications.Provider | Should -Be 'Teams'
+                $notifications.FallbackPath | Should -Be 'notifications/custom'
+                $metadata.Path | Should -Be $path
+            }
+            finally {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+
+        It 'returns null for unknown areas' {
+            $path = Join-Path -Path $TestDrive -ChildPath 'integration-unknown.json'
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $path, 'Process')
+                $result = Get-MfaIntegrationConfig -Area 'Nonexistent' -Refresh
+                $result | Should -BeNull
+            }
+            finally {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+    }
+}
+
+Describe 'New-MfaTicketPayload' {
+    InModuleScope MFACheckandSteer {
+        It 'creates payload with key playbook metadata' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-002'
+                DetectionId       = 'MFA-DET-002'
+                UserPrincipalName = 'user@contoso.com'
+                Severity          = 'High'
+                ControlOwner      = 'SecOps IAM'
+                ResponseSlaHours  = 4
+                ExecutedSteps     = @('Block account','Reset password')
+                SkippedSteps      = @('Notify user')
+                ReportingTags     = @('Tag1','Tag2')
+                FrameworkTags     = @('NIST-CSF-ID')
+                CorrelationIds    = @('corr-1')
+                FailureReasons    = @('User unreachable')
+            }
+
+            $result = New-MfaTicketPayload -Playbook $playbook -Provider 'ServiceNow' -AssignmentGroup 'IAM-Response' -TicketType 'Incident'
+
+            $result.Provider | Should -Be 'ServiceNow'
+            $result.AssignmentGroup | Should -Be 'IAM-Response'
+            $result.PlaybookId | Should -Be 'MFA-PL-002'
+            $result.DetectionId | Should -Be 'MFA-DET-002'
+            $result.ExecutedSteps | Should -Contain 'Block account'
+            $result.SkippedSteps | Should -Contain 'Notify user'
+            $result.Metadata.ReportingTags | Should -Contain 'Tag1'
+            $result.Metadata.GeneratedUtc | Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'Submit-MfaPlaybookTicket' {
+    InModuleScope MFACheckandSteer {
+        It 'writes ticket payload to specified file when no endpoint is configured' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-001'
+                DetectionId       = 'MFA-DET-001'
+                UserPrincipalName = 'analyst@contoso.com'
+                Severity          = 'Medium'
+                ControlOwner      = 'SecOps IAM'
+                ResponseSlaHours  = 8
+                ExecutedSteps     = @('Validate context')
+            }
+
+            $target = Join-Path -Path $TestDrive -ChildPath 'ticket-output.json'
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+
+                $result = Submit-MfaPlaybookTicket -Playbook $playbook -OutFile $target -PassThru
+                $result.Delivery | Should -Be 'File'
+                $result.Target | Should -Be $target
+                Test-Path -Path $target | Should -BeTrue
+
+                $written = Get-Content -Path $target -Raw | ConvertFrom-Json
+                $written.PlaybookId | Should -Be 'MFA-PL-001'
+                $written.UserPrincipalName | Should -Be 'analyst@contoso.com'
+            }
+            finally {
+                Remove-Item -Path $target -ErrorAction SilentlyContinue
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                [Environment]::SetEnvironmentVariable('PLAYBOOK_TICKET_TOKEN', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+
+        It 'sends webhook with bearer token when configured' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-003'
+                DetectionId       = 'MFA-DET-003'
+                UserPrincipalName = 'owner@contoso.com'
+                Severity          = 'Critical'
+                ControlOwner      = 'SecOps IAM'
+                ResponseSlaHours  = 2
+                ExecutedSteps     = @('Contain account')
+            }
+
+            $configPath = Join-Path -Path $TestDrive -ChildPath 'integration-ticketing.json'
+            @{
+                Ticketing = @{
+                    Provider               = 'ServiceNow'
+                    Endpoint               = 'https://example.com/api/tickets'
+                    DefaultAssignmentGroup = 'SecOps-MFA'
+                    Authorization          = @{
+                        Type        = 'Bearer'
+                        TokenEnvVar = 'PLAYBOOK_TICKET_TOKEN'
+                    }
+                }
+            } | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
+
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $configPath, 'Process')
+                [Environment]::SetEnvironmentVariable('PLAYBOOK_TICKET_TOKEN', 'secret-token', 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+
+                Mock -CommandName Invoke-RestMethod -ModuleName MFACheckandSteer -MockWith {
+                    param(
+                        [string] $Uri,
+                        [string] $Method,
+                        $Headers,
+                        [string] $Body,
+                        [string] $ContentType
+                    )
+                    Set-Variable -Name LastInvokeHeaders -Scope Script -Value $Headers
+                    Set-Variable -Name LastInvokeBody -Scope Script -Value $Body
+                    return @{ Status = 'OK' }
+                }
+
+                $result = Submit-MfaPlaybookTicket -Playbook $playbook -PassThru
+                $result.Delivery | Should -Be 'Webhook'
+                $result.Target | Should -Be 'https://example.com/api/tickets'
+
+                Assert-MockCalled Invoke-RestMethod -Times 1 -Scope It -ParameterFilter {
+                    $Uri -eq 'https://example.com/api/tickets' -and
+                    $Method -eq 'Post'
+                }
+                $script:LastInvokeHeaders['Authorization'] | Should -Be 'Bearer secret-token'
+                $script:LastInvokeBody | Should -Match 'MFA-PL-003'
+            }
+            finally {
+                Remove-Item -Path $configPath -ErrorAction SilentlyContinue
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                [Environment]::SetEnvironmentVariable('PLAYBOOK_TICKET_TOKEN', $null, 'Process')
+                Remove-Variable -Name LastInvokeHeaders -Scope Script -ErrorAction SilentlyContinue
+                Remove-Variable -Name LastInvokeBody -Scope Script -ErrorAction SilentlyContinue
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+    }
+}
+
+Describe 'New-MfaNotificationPayload' {
+    InModuleScope MFACheckandSteer {
+        It 'creates provider specific summary' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-004'
+                DetectionId       = 'MFA-DET-005'
+                UserPrincipalName = 'triage@contoso.com'
+                Severity          = 'High'
+                ExecutedSteps     = @('Review indicators', 'Notify manager')
+            }
+
+            $result = New-MfaNotificationPayload -Playbook $playbook -Provider 'Teams'
+            $result.text | Should -Match 'MFA-PL-004'
+            $result.text | Should -Match 'triage@contoso.com'
+        }
+    }
+}
+
+Describe 'Send-MfaPlaybookNotification' {
+    InModuleScope MFACheckandSteer {
+        It 'writes notification payload to specified file when webhook is absent' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-005'
+                DetectionId       = 'MFA-DET-006'
+                UserPrincipalName = 'notify@contoso.com'
+                Severity          = 'Medium'
+                ExecutedSteps     = @('Review indicators')
+            }
+
+            $target = Join-Path -Path $TestDrive -ChildPath 'notification-output.json'
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+
+                $result = Send-MfaPlaybookNotification -Playbook $playbook -OutFile $target -PassThru
+                $result.Delivery | Should -Be 'File'
+                $result.Target | Should -Be $target
+                Test-Path -Path $target | Should -BeTrue
+
+                $written = Get-Content -Path $target -Raw | ConvertFrom-Json
+                $written | Should -Not -BeNullOrEmpty
+                $written.message | Should -Match 'MFA-PL-005'
+            }
+            finally {
+                Remove-Item -Path $target -ErrorAction SilentlyContinue
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                [Environment]::SetEnvironmentVariable('PLAYBOOK_NOTIFY_URL', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+
+        It 'posts notification to webhook when environment variable is set' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-006'
+                DetectionId       = 'MFA-DET-007'
+                UserPrincipalName = 'webhook@contoso.com'
+                Severity          = 'Critical'
+                ExecutedSteps     = @('Escalate incident')
+            }
+
+            $configPath = Join-Path -Path $TestDrive -ChildPath 'integration-notify.json'
+            @{
+                Notifications = @{
+                    Provider         = 'Teams'
+                    WebhookUrlEnvVar = 'PLAYBOOK_NOTIFY_URL'
+                }
+            } | ConvertTo-Json -Depth 5 | Set-Content -Path $configPath -Encoding UTF8
+
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $configPath, 'Process')
+                [Environment]::SetEnvironmentVariable('PLAYBOOK_NOTIFY_URL', 'https://example.com/webhook', 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+
+                Mock -CommandName Invoke-RestMethod -ModuleName MFACheckandSteer -MockWith {
+                    param(
+                        [string] $Uri,
+                        [string] $Method,
+                        [string] $Body,
+                        [string] $ContentType
+                    )
+                    return @{ Status = 'OK' }
+                }
+
+                $result = Send-MfaPlaybookNotification -Playbook $playbook -PassThru
+                $result.Delivery | Should -Be 'Webhook'
+                $result.Target | Should -Be 'https://example.com/webhook'
+
+                Assert-MockCalled Invoke-RestMethod -Times 1 -Scope It -ParameterFilter {
+                    $Uri -eq 'https://example.com/webhook' -and $Method -eq 'Post'
+                }
+            }
+            finally {
+                Remove-Item -Path $configPath -ErrorAction SilentlyContinue
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                [Environment]::SetEnvironmentVariable('PLAYBOOK_NOTIFY_URL', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+    }
+}
+
 if ($null -ne $script:OriginalPlaybookRoles) {
     [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $script:OriginalPlaybookRoles, 'Process')
 }
 else {
     [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $null, 'Process')
 }
+
+if ($null -ne $script:OriginalIntegrationConfigPath) {
+    [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $script:OriginalIntegrationConfigPath, 'Process')
+}
+else {
+    [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+}
+
+Get-MfaIntegrationConfig -Refresh | Out-Null
 
 Describe 'Get-MfaDetectionConfiguration' {
     It 'returns defaults when overrides are not provided' {

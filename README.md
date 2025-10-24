@@ -61,6 +61,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - Run `Get-MfaDetectionConfiguration` (optionally with `-Refresh`) to confirm effective settings; overrides apply automatically unless cmdlet parameters are provided at call time.
 - Set the `MfaDetectionConfigurationPath` environment variable to point at an alternate JSON file when testing changes or running scenario-specific baselines.
 - Review and adjust `config/playbooks.json` to align required roles with your operational teams. Set the `MFA_PLAYBOOK_ROLES` environment variable (comma- or semicolon-delimited) for operators so `Test-MfaPlaybookAuthorization` can validate access before remediation runs.
+- Configure ticketing and notification integrations through `config/integrations.json` (or an override pointed to by `MfaIntegrationConfigurationPath`); see `docs/guides/integration-configuration.md` for schema details and secret-handling guidance.
 
 - Review `docs/detections/playbooks/phase-5-response-strategy.md` for the Phase 5 remediation playbook approach and the individual playbook specs under `docs/detections/playbooks/` (MFA-PL-001 through MFA-PL-006).
 

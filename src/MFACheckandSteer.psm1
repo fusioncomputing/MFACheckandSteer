@@ -535,6 +535,26 @@ $script:MfaDetectionDefaultConfig = @{
     }
 }
 
+$script:MfaIntegrationDefaultConfig = @{
+    Ticketing = @{
+        Provider               = 'Generic'
+        Endpoint               = $null
+        DefaultAssignmentGroup = 'SecOps-MFA'
+        Authorization          = @{
+            Type           = 'None'
+            TokenEnvVar    = $null
+            UsernameEnvVar = $null
+            PasswordEnvVar = $null
+        }
+        FallbackPath           = 'tickets/outbox'
+    }
+    Notifications = @{
+        Provider         = 'Generic'
+        WebhookUrlEnvVar = $null
+        FallbackPath     = 'notifications/outbox'
+    }
+}
+
 $script:MfaPlaybookDefaultPolicy = @{
     'MFA-PL-001' = @{
         RequiredRoles = @('SecOps-IAM')
@@ -574,6 +594,43 @@ function Get-MfaDetectionConfigPath {
     }
 
     return $customPath
+}
+
+function Get-MfaIntegrationConfigPath {
+    $customPath = [Environment]::GetEnvironmentVariable('MfaIntegrationConfigurationPath', 'Process')
+    if (-not $customPath) {
+        $moduleRoot = Split-Path -Parent $PSScriptRoot
+        $customPath = Join-Path -Path $moduleRoot -ChildPath 'config/integrations.json'
+    }
+
+    return $customPath
+}
+
+function ConvertTo-MfaConfigObject {
+    param(
+        $Value
+    )
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $copy = [ordered]@{}
+        foreach ($key in $Value.Keys) {
+            $copy[$key] = ConvertTo-MfaConfigObject -Value $Value[$key]
+        }
+        return [pscustomobject]$copy
+    }
+    elseif ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $list = @()
+        foreach ($item in $Value) {
+            $list += ConvertTo-MfaConfigObject -Value $item
+        }
+        return $list
+    }
+
+    return $Value
 }
 
 function Set-MfaConfigInt {
@@ -772,6 +829,75 @@ function Get-MfaDetectionConfiguration {
     }
 
     return $script:MfaDetectionConfigCache
+}
+
+$script:MfaIntegrationConfigCache = $null
+
+function Initialize-MfaIntegrationConfig {
+    $effective = @{}
+    foreach ($entry in $script:MfaIntegrationDefaultConfig.GetEnumerator()) {
+        $copy = [ordered]@{}
+        foreach ($key in $entry.Value.Keys) {
+            $copy[$key] = ConvertTo-MfaConfigObject -Value $entry.Value[$key]
+        }
+        $effective[$entry.Key] = $copy
+    }
+
+    $path = Get-MfaIntegrationConfigPath
+    if (Test-Path $path) {
+        try {
+            $raw = Get-Content -Path $path -Raw
+            if ($raw) {
+                $overrides = ConvertFrom-Json -InputObject $raw -AsHashtable
+                foreach ($entry in $overrides.GetEnumerator()) {
+                    $area = [string]$entry.Key
+                    $value = $entry.Value
+                    if (-not $effective.ContainsKey($area)) {
+                        $effective[$area] = [ordered]@{}
+                    }
+
+                    foreach ($prop in $value.GetEnumerator()) {
+                        $name = [string]$prop.Key
+                        $propValue = $prop.Value
+                        $effective[$area][$name] = ConvertTo-MfaConfigObject -Value $propValue
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Warning "Failed to parse integration configuration file at '$path'. Using defaults. Error: $($_.Exception.Message)"
+        }
+    }
+
+    $script:MfaIntegrationConfigCache = @{}
+    foreach ($entry in $effective.GetEnumerator()) {
+        $script:MfaIntegrationConfigCache[$entry.Key] = [pscustomobject]$entry.Value
+    }
+    $script:MfaIntegrationConfigCache['__Metadata'] = [pscustomobject]@{
+        Path = $path
+    }
+}
+
+function Get-MfaIntegrationConfig {
+    [CmdletBinding()]
+    param(
+        [string] $Area,
+        [switch] $Refresh
+    )
+
+    if ($Refresh -or -not $script:MfaIntegrationConfigCache) {
+        Initialize-MfaIntegrationConfig
+    }
+
+    if ($Area) {
+        if ($script:MfaIntegrationConfigCache.ContainsKey($Area)) {
+            return $script:MfaIntegrationConfigCache[$Area]
+        }
+
+        return $null
+    }
+
+    return $script:MfaIntegrationConfigCache
 }
 
 $script:MfaPlaybookPolicyCache = $null
@@ -2862,4 +2988,398 @@ function Invoke-MfaPlaybookTriageSuspiciousScore {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore
+function New-MfaTicketPayload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Playbook,
+        [string] $Provider = 'Generic',
+        [string] $AssignmentGroup = 'SecOps-MFA',
+        [string] $TicketType = 'Incident'
+    )
+
+    process {
+        if (-not $Playbook) {
+            return
+        }
+
+        $playbookId = if ($Playbook.PSObject.Properties['PlaybookId']) { [string]$Playbook.PlaybookId } else { 'Unknown' }
+        $detectionId = if ($Playbook.PSObject.Properties['DetectionId']) { [string]$Playbook.DetectionId } else { $null }
+        $user = if ($Playbook.PSObject.Properties['UserPrincipalName']) { [string]$Playbook.UserPrincipalName } else { $null }
+        $severity = if ($Playbook.PSObject.Properties['Severity'] -and $Playbook.Severity) { [string]$Playbook.Severity } elseif ($Playbook.PSObject.Properties['RiskState'] -and $Playbook.RiskState) { [string]$Playbook.RiskState } else { 'Medium' }
+        $controlOwner = if ($Playbook.PSObject.Properties['ControlOwner']) { [string]$Playbook.ControlOwner } else { $null }
+        $sla = if ($Playbook.PSObject.Properties['ResponseSlaHours']) { [int]$Playbook.ResponseSlaHours } else { $null }
+
+        $titleUser = if ($user) { $user } else { 'account' }
+        $title = "[{0}] Playbook triggered for {1}" -f $playbookId, $titleUser
+
+        $executedSteps = @()
+        if ($Playbook.PSObject.Properties['ExecutedSteps']) {
+            $executedSteps = @($Playbook.ExecutedSteps | Where-Object { $_ })
+        }
+        $skippedSteps = @()
+        if ($Playbook.PSObject.Properties['SkippedSteps']) {
+            $skippedSteps = @($Playbook.SkippedSteps | Where-Object { $_ })
+        }
+
+        $lines = @()
+        $lines += "Playbook **$playbookId** executed for $titleUser."
+        if ($detectionId) {
+            $lines += "Detection: `$detectionId`."
+        }
+        $lines += "Severity: $severity."
+        if ($executedSteps) {
+            $lines += "Steps executed:"
+            $lines += ($executedSteps | ForEach-Object { "- $_" })
+        }
+        if ($skippedSteps) {
+            $lines += "Steps skipped:"
+            $lines += ($skippedSteps | ForEach-Object { "- $_" })
+        }
+
+        if ($Playbook.PSObject.Properties['ReportingTags'] -and $Playbook.ReportingTags) {
+            $lines += "Reporting tags: " + ($Playbook.ReportingTags -join ', ')
+        }
+        if ($Playbook.PSObject.Properties['FrameworkTags'] -and $Playbook.FrameworkTags) {
+            $lines += "Framework tags: " + ($Playbook.FrameworkTags -join ', ')
+        }
+
+        $description = ($lines -join "`n")
+
+        $metadata = @{
+            GeneratedUtc    = (Get-Date).ToUniversalTime().ToString('o')
+            PlaybookId      = $playbookId
+            DetectionId     = $detectionId
+            ReportingTags   = if ($Playbook.PSObject.Properties['ReportingTags']) { @($Playbook.ReportingTags) } else { @() }
+            FrameworkTags   = if ($Playbook.PSObject.Properties['FrameworkTags']) { @($Playbook.FrameworkTags) } else { @() }
+            Severity        = $severity
+        }
+
+        if ($Playbook.PSObject.Properties['CorrelationIds'] -and $Playbook.CorrelationIds) {
+            $metadata['CorrelationIds'] = @($Playbook.CorrelationIds)
+        }
+        if ($Playbook.PSObject.Properties['FailureReasons'] -and $Playbook.FailureReasons) {
+            $metadata['FailureReasons'] = $Playbook.FailureReasons
+        }
+
+        return [pscustomobject]@{
+            Provider        = $Provider
+            TicketType      = $TicketType
+            Title           = $title
+            Description     = $description
+            PlaybookId      = $playbookId
+            DetectionId     = $detectionId
+            Severity        = $severity
+            UserPrincipalName = $user
+            ControlOwner    = $controlOwner
+            ResponseSlaHours = $sla
+            AssignmentGroup = $AssignmentGroup
+            ExecutedSteps   = $executedSteps
+            SkippedSteps    = $skippedSteps
+            Metadata        = $metadata
+        }
+    }
+}
+
+function Submit-MfaPlaybookTicket {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Playbook,
+
+        [string] $OutFile,
+        [switch] $PassThru
+    )
+
+    begin {
+        $ticketConfig = Get-MfaIntegrationConfig -Area 'Ticketing'
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $results = @()
+    }
+
+    process {
+        if (-not $Playbook) { return }
+
+        $provider = if ($ticketConfig -and $ticketConfig.PSObject.Properties['Provider']) { [string]$ticketConfig.Provider } else { 'Generic' }
+        $assignmentGroup = if ($ticketConfig -and $ticketConfig.PSObject.Properties['DefaultAssignmentGroup']) { [string]$ticketConfig.DefaultAssignmentGroup } else { 'SecOps-MFA' }
+        $payload = New-MfaTicketPayload -Playbook $Playbook -Provider $provider -AssignmentGroup $assignmentGroup
+
+        if (-not $payload) { return }
+
+        $endpoint = if ($ticketConfig -and $ticketConfig.PSObject.Properties['Endpoint']) { [string]$ticketConfig.Endpoint } else { $null }
+        $fallbackPath = 'tickets/outbox'
+        if ($ticketConfig -and $ticketConfig.PSObject.Properties['FallbackPath'] -and $ticketConfig.FallbackPath) {
+            $fallbackPath = [string]$ticketConfig.FallbackPath
+        }
+
+        $target = $OutFile
+        $delivery = 'File'
+        $response = $null
+
+        if (-not $target) {
+            if ($endpoint) {
+                $target = $endpoint
+                $delivery = 'Webhook'
+            }
+            else {
+                $targetDir = if ([System.IO.Path]::IsPathRooted($fallbackPath)) { $fallbackPath } else { Join-Path -Path $repoRoot -ChildPath $fallbackPath }
+                $target = Join-Path -Path $targetDir -ChildPath ("ticket-{0}.json" -f ([guid]::NewGuid()))
+            }
+        }
+
+        if ($delivery -eq 'File') {
+            $targetDir = Split-Path -Parent $target
+            if (-not (Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess($target, 'Submit MFA playbook ticket')) {
+            if ($delivery -eq 'Webhook') {
+                $headers = @{ 'Content-Type' = 'application/json' }
+                $auth = if ($ticketConfig -and $ticketConfig.PSObject.Properties['Authorization']) { $ticketConfig.Authorization } else { $null }
+                if ($auth) {
+                    $authType = if ($auth.PSObject.Properties['Type']) { [string]$auth.Type } else { 'None' }
+                    switch ($authType) {
+                        'Bearer' {
+                            if ($auth.PSObject.Properties['TokenEnvVar'] -and $auth.TokenEnvVar) {
+                                $token = [Environment]::GetEnvironmentVariable($auth.TokenEnvVar, 'Process')
+                                if (-not $token) {
+                                    $token = [Environment]::GetEnvironmentVariable($auth.TokenEnvVar, 'Machine')
+                                }
+                                if ($token) {
+                                    $headers['Authorization'] = "Bearer $token"
+                                }
+                                else {
+                                    Write-Warning "Bearer token environment variable '$($auth.TokenEnvVar)' is not set. Falling back to file delivery."
+                                    $delivery = 'File'
+                                }
+                            }
+                        }
+                        'Basic' {
+                            $username = $null
+                            $password = $null
+                            if ($auth.PSObject.Properties['UsernameEnvVar'] -and $auth.UsernameEnvVar) {
+                                $username = [Environment]::GetEnvironmentVariable($auth.UsernameEnvVar, 'Process')
+                                if (-not $username) {
+                                    $username = [Environment]::GetEnvironmentVariable($auth.UsernameEnvVar, 'Machine')
+                                }
+                            }
+                            if ($auth.PSObject.Properties['PasswordEnvVar'] -and $auth.PasswordEnvVar) {
+                                $password = [Environment]::GetEnvironmentVariable($auth.PasswordEnvVar, 'Process')
+                                if (-not $password) {
+                                    $password = [Environment]::GetEnvironmentVariable($auth.PasswordEnvVar, 'Machine')
+                                }
+                            }
+                            if ($username -and $password) {
+                                $token = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("{0}:{1}" -f $username, $password))
+                                $headers['Authorization'] = "Basic $token"
+                            }
+                            else {
+                                Write-Warning 'Basic authorization configured but username/password env vars are missing. Falling back to file delivery.'
+                                $delivery = 'File'
+                            }
+                        }
+                    }
+                }
+
+                if ($delivery -eq 'Webhook') {
+                    $body = $payload | ConvertTo-Json -Depth 10
+                    try {
+                        $response = Invoke-RestMethod -Uri $endpoint -Method Post -Headers $headers -Body $body -ContentType 'application/json'
+                    }
+                    catch {
+                        Write-Warning ("Ticket submission to '{0}' failed: {1}. Falling back to file delivery." -f $endpoint, $_.Exception.Message)
+                        $delivery = 'File'
+                        $fallbackDir = if ([System.IO.Path]::IsPathRooted($fallbackPath)) { $fallbackPath } else { Join-Path -Path $repoRoot -ChildPath $fallbackPath }
+                        if (-not (Test-Path $fallbackDir)) {
+                            New-Item -ItemType Directory -Path $fallbackDir -Force | Out-Null
+                        }
+                        $target = Join-Path -Path $fallbackDir -ChildPath ("ticket-{0}.json" -f ([guid]::NewGuid()))
+                    }
+                }
+            }
+
+            if ($delivery -eq 'File') {
+                $targetDir = Split-Path -Parent $target
+                if (-not (Test-Path $targetDir)) {
+                    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+                }
+                $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $target -Encoding UTF8
+            }
+        }
+
+        $result = [pscustomobject]@{
+            TicketPayload = $payload
+            Delivery      = $delivery
+            Target        = $target
+            Response      = $response
+        }
+
+        if ($PassThru) {
+            $results += $result
+        }
+        else {
+            $result
+        }
+    }
+
+    end {
+        if ($PassThru -and $results) {
+            return $results
+        }
+    }
+}
+
+function New-MfaNotificationPayload {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Playbook,
+        [string] $Provider = 'Generic'
+    )
+
+    process {
+        if (-not $Playbook) { return }
+        $playbookId = if ($Playbook.PSObject.Properties['PlaybookId']) { [string]$Playbook.PlaybookId } else { 'Playbook' }
+        $user = if ($Playbook.PSObject.Properties['UserPrincipalName']) { [string]$Playbook.UserPrincipalName } else { 'Unknown user' }
+        $severity = if ($Playbook.PSObject.Properties['Severity'] -and $Playbook.Severity) { [string]$Playbook.Severity } else { 'Medium' }
+
+        $executedSteps = @()
+        if ($Playbook.PSObject.Properties['ExecutedSteps']) {
+            $executedSteps = @($Playbook.ExecutedSteps | Where-Object { $_ })
+        }
+
+        $summary = @(
+            "*Playbook:* $playbookId",
+            "*User:* $user",
+            "*Severity:* $severity"
+        )
+
+        if ($Playbook.PSObject.Properties['DetectionId'] -and $Playbook.DetectionId) {
+            $summary += "*Detection:* $($Playbook.DetectionId)"
+        }
+
+        if ($executedSteps) {
+            $summary += '*Executed Steps:*'
+            $summary += ($executedSteps | ForEach-Object { "- $_" })
+        }
+
+        $text = $summary -join "`n"
+
+        switch ($Provider.ToLowerInvariant()) {
+            'teams' { return @{ text = $text } }
+            'slack' { return @{ text = $text } }
+            default { return @{ message = $text } }
+        }
+    }
+}
+
+function Send-MfaPlaybookNotification {
+    [CmdletBinding(SupportsShouldProcess)]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Playbook,
+
+        [string] $OutFile,
+        [switch] $PassThru
+    )
+
+    begin {
+        $notificationConfig = Get-MfaIntegrationConfig -Area 'Notifications'
+        $repoRoot = Split-Path -Parent $PSScriptRoot
+        $results = @()
+    }
+
+    process {
+        if (-not $Playbook) { return }
+
+        $provider = if ($notificationConfig -and $notificationConfig.PSObject.Properties['Provider']) { [string]$notificationConfig.Provider } else { 'Generic' }
+        $payload = New-MfaNotificationPayload -Playbook $Playbook -Provider $provider
+        if (-not $payload) { return }
+
+        $webhookEnv = if ($notificationConfig -and $notificationConfig.PSObject.Properties['WebhookUrlEnvVar']) { [string]$notificationConfig.WebhookUrlEnvVar } else { $null }
+        $webhookUrl = $null
+        if ($webhookEnv) {
+            $webhookUrl = [Environment]::GetEnvironmentVariable($webhookEnv, 'Process')
+            if (-not $webhookUrl) {
+                $webhookUrl = [Environment]::GetEnvironmentVariable($webhookEnv, 'Machine')
+            }
+        }
+
+        $fallbackPath = 'notifications/outbox'
+        if ($notificationConfig -and $notificationConfig.PSObject.Properties['FallbackPath'] -and $notificationConfig.FallbackPath) {
+            $fallbackPath = [string]$notificationConfig.FallbackPath
+        }
+
+        $target = $OutFile
+        $delivery = 'File'
+        $response = $null
+
+        if (-not $target) {
+            if ($webhookUrl) {
+                $target = $webhookUrl
+                $delivery = 'Webhook'
+            }
+            else {
+                $dir = if ([System.IO.Path]::IsPathRooted($fallbackPath)) { $fallbackPath } else { Join-Path -Path $repoRoot -ChildPath $fallbackPath }
+                $target = Join-Path -Path $dir -ChildPath ("notification-{0}.json" -f ([guid]::NewGuid()))
+            }
+        }
+
+        if ($delivery -eq 'File') {
+            $targetDir = Split-Path -Parent $target
+            if (-not (Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+            }
+        }
+
+        if ($PSCmdlet.ShouldProcess($target, 'Send MFA playbook notification')) {
+            if ($delivery -eq 'Webhook') {
+                $body = $payload | ConvertTo-Json -Depth 10
+                try {
+                    $response = Invoke-RestMethod -Uri $webhookUrl -Method Post -Body $body -ContentType 'application/json'
+                }
+                catch {
+                    Write-Warning ("Notification delivery to '{0}' failed: {1}. Falling back to file delivery." -f $webhookUrl, $_.Exception.Message)
+                    $delivery = 'File'
+                    $dir = if ([System.IO.Path]::IsPathRooted($fallbackPath)) { $fallbackPath } else { Join-Path -Path $repoRoot -ChildPath $fallbackPath }
+                    if (-not (Test-Path $dir)) {
+                        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                    }
+                    $target = Join-Path -Path $dir -ChildPath ("notification-{0}.json" -f ([guid]::NewGuid()))
+                }
+            }
+
+            if ($delivery -eq 'File') {
+                $targetDir = Split-Path -Parent $target
+                if (-not (Test-Path $targetDir)) {
+                    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+                }
+                $payload | ConvertTo-Json -Depth 10 | Set-Content -Path $target -Encoding UTF8
+            }
+        }
+
+        $result = [pscustomobject]@{
+            NotificationPayload = $payload
+            Delivery            = $delivery
+            Target              = $target
+            Response            = $response
+        }
+
+        if ($PassThru) {
+            $results += $result
+        }
+        else {
+            $result
+        }
+    }
+
+    end {
+        if ($PassThru -and $results) {
+            return $results
+        }
+    }
+}
+
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification

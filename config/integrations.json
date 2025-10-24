@@ -1,0 +1,19 @@
+{
+  "Ticketing": {
+    "Provider": "Generic",
+    "Endpoint": null,
+    "DefaultAssignmentGroup": "SecOps-MFA",
+    "Authorization": {
+      "Type": "None",
+      "TokenEnvVar": null,
+      "UsernameEnvVar": null,
+      "PasswordEnvVar": null
+    },
+    "FallbackPath": "tickets/outbox"
+  },
+  "Notifications": {
+    "Provider": "Generic",
+    "WebhookUrlEnvVar": null,
+    "FallbackPath": "notifications/outbox"
+  }
+}
