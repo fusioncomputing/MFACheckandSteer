@@ -3922,7 +3922,7 @@ function New-MfaHtmlReport {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification, Invoke-MfaPlaybookOutputs, New-MfaHtmlReport
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification, Invoke-MfaPlaybookOutputs, New-MfaHtmlReport, Invoke-MfaScenarioReport
 
 function Invoke-MfaScenarioReport {
     [CmdletBinding()]
@@ -4148,8 +4148,13 @@ function Invoke-MfaScenarioReport {
         }
     }
 
+    $scorePlaybookParams = [hashtable]$playbookParams.Clone()
+    if ($scorePlaybookParams.ContainsKey('SkipGraphValidation')) {
+        $scorePlaybookParams.Remove('SkipGraphValidation')
+    }
+
     foreach ($score in $allDetections | Where-Object { $_.PSObject.Properties['Score'] }) {
-        $plan = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score @playbookParams
+        $plan = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score @scorePlaybookParams
         if ($plan) {
             $playbookPlans += $plan
         }
@@ -4192,3 +4197,5 @@ function Invoke-MfaScenarioReport {
         $result.HtmlReport
     }
 }
+
+Export-ModuleMember -Function Invoke-MfaScenarioReport
