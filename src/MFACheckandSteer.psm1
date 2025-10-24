@@ -3397,13 +3397,18 @@ function Invoke-MfaPlaybookOutputs {
 
     begin {
         $results = @()
+        Write-Verbose 'Invoking playbook output helpers.'
     }
 
     process {
         if (-not $Playbook) { return }
 
+        $targetUser = if ($Playbook.PSObject.Properties['UserPrincipalName']) { $Playbook.UserPrincipalName } else { 'unknown user' }
+        Write-Verbose ("Processing playbook '{0}' for {1}." -f $Playbook.PlaybookId, $targetUser)
+
         $ticketResult = $null
         if (-not $SkipTicket) {
+            Write-Progress -Activity 'Submitting playbook ticket' -Status 'Generating payload' -PercentComplete 10
             $ticketParams = @{
                 Playbook = $Playbook
             }
@@ -3411,10 +3416,15 @@ function Invoke-MfaPlaybookOutputs {
                 $ticketParams['OutFile'] = $TicketOutFile
             }
             $ticketResult = Submit-MfaPlaybookTicket @ticketParams
+            Write-Progress -Activity 'Submitting playbook ticket' -Completed
+            if ($ticketResult) {
+                Write-Verbose ("Ticket target: {0}" -f $ticketResult.Target)
+            }
         }
 
         $notificationResult = $null
         if (-not $SkipNotification) {
+            Write-Progress -Activity 'Sending playbook notification' -Status 'Generating payload' -PercentComplete 10
             $notificationParams = @{
                 Playbook = $Playbook
             }
@@ -3422,6 +3432,10 @@ function Invoke-MfaPlaybookOutputs {
                 $notificationParams['OutFile'] = $NotificationOutFile
             }
             $notificationResult = Send-MfaPlaybookNotification @notificationParams
+            Write-Progress -Activity 'Sending playbook notification' -Completed
+            if ($notificationResult) {
+                Write-Verbose ("Notification target: {0}" -f $notificationResult.Target)
+            }
         }
 
         $summary = [pscustomobject]@{
@@ -3440,9 +3454,475 @@ function Invoke-MfaPlaybookOutputs {
 
     end {
         if ($PassThru -and $results) {
+            Write-Verbose ("Aggregated playbook outputs: {0}" -f $results.Count)
             return $results
         }
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification, Invoke-MfaPlaybookOutputs
+function New-MfaHtmlReport {
+    [CmdletBinding()]
+    param(
+        [psobject[]] $Detections,
+        [psobject[]] $Playbooks,
+        [string] $Path,
+        [switch] $OpenInBrowser
+    )
+
+    Write-Verbose 'Starting HTML report composition.'
+    $encode = {
+        param($value)
+        if ($null -eq $value) { return '' }
+        return [System.Net.WebUtility]::HtmlEncode([string]$value)
+    }
+
+    $detCollection = @()
+    if ($Detections) {
+        $detCollection = @($Detections | Where-Object { $_ })
+    }
+
+    $playCollection = @()
+    foreach ($item in @($Playbooks)) {
+        if (-not $item) { continue }
+
+        $playbook = $null
+        $ticket = $null
+        $notification = $null
+
+        if ($item.PSObject.Properties['Playbook'] -and $item.Playbook) {
+            $playbook = $item.Playbook
+            if ($item.PSObject.Properties['TicketResult']) { $ticket = $item.TicketResult }
+            if ($item.PSObject.Properties['NotificationResult']) { $notification = $item.NotificationResult }
+        }
+        else {
+            $playbook = $item
+            if ($item.PSObject.Properties['TicketResult']) { $ticket = $item.TicketResult }
+            if ($item.PSObject.Properties['NotificationResult']) { $notification = $item.NotificationResult }
+        }
+
+        if ($playbook) {
+            $ticketTarget = $null
+            if ($ticket -and $ticket.PSObject.Properties['Target']) {
+                $ticketTarget = $ticket.Target
+            }
+            elseif ($item.PSObject.Properties['TicketTarget']) {
+                $ticketTarget = $item.TicketTarget
+            }
+
+            $notificationTarget = $null
+            if ($notification -and $notification.PSObject.Properties['Target']) {
+                $notificationTarget = $notification.Target
+            }
+            elseif ($item.PSObject.Properties['NotificationTarget']) {
+                $notificationTarget = $item.NotificationTarget
+            }
+
+            $playCollection += [pscustomobject]@{
+                Playbook           = $playbook
+                TicketTarget       = $ticketTarget
+                NotificationTarget = $notificationTarget
+            }
+        }
+    }
+
+    $severityOrder = @('Critical', 'High', 'Medium', 'Low', 'Informational')
+    $severityClass = {
+        param([string] $value)
+        switch ($value.ToLowerInvariant()) {
+            'critical' { 'sev-critical' }
+            'high'     { 'sev-high' }
+            'medium'   { 'sev-medium' }
+            'low'      { 'sev-low' }
+            default    { 'sev-default' }
+        }
+    }
+
+    $detSeverityCounts = [ordered]@{}
+    foreach ($sev in $severityOrder) { $detSeverityCounts[$sev] = 0 }
+    foreach ($det in $detCollection) {
+        $sev = if ($det.PSObject.Properties['Severity'] -and $det.Severity) { [string]$det.Severity } else { 'Informational' }
+        if (-not $detSeverityCounts.Contains($sev)) { $detSeverityCounts[$sev] = 0 }
+        $detSeverityCounts[$sev]++
+    }
+
+    $playSeverityCounts = [ordered]@{}
+    foreach ($sev in $severityOrder) { $playSeverityCounts[$sev] = 0 }
+    foreach ($entry in $playCollection) {
+        $play = $entry.Playbook
+        $sev = if ($play -and $play.PSObject.Properties['Severity'] -and $play.Severity) { [string]$play.Severity } else { 'Informational' }
+        if (-not $playSeverityCounts.Contains($sev)) { $playSeverityCounts[$sev] = 0 }
+        $playSeverityCounts[$sev]++
+    }
+
+    $totalDetections = $detCollection.Count
+    $totalPlaybooks = $playCollection.Count
+    Write-Verbose ("Detections included: {0}; Playbooks included: {1}" -f $totalDetections, $totalPlaybooks)
+    $detScale = if ($totalDetections -gt 0) { [double]$totalDetections } else { 1 }
+    $playScale = if ($totalPlaybooks -gt 0) { [double]$totalPlaybooks } else { 1 }
+
+    Write-Progress -Activity 'Generating MFA HTML report' -Status 'Composing content' -PercentComplete 25
+    $sb = [System.Text.StringBuilder]::new()
+    $null = $sb.AppendLine('<!DOCTYPE html>')
+    $null = $sb.AppendLine('<html lang="en">')
+    $null = $sb.AppendLine('<head>')
+    $null = $sb.AppendLine('<meta charset="utf-8" />')
+    $null = $sb.AppendLine('<title>MFA Check &amp; Steer Summary</title>')
+    $null = $sb.AppendLine('<style>')
+    $null = $sb.AppendLine('body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; color: #1f2933; background: #f4f7fb; }')
+    $null = $sb.AppendLine('h1 { margin-bottom: 0.2em; }')
+    $null = $sb.AppendLine('h2 { margin-top: 1.6em; }')
+    $null = $sb.AppendLine('table { border-collapse: collapse; width: 100%; margin-top: 0.6em; }')
+    $null = $sb.AppendLine('th, td { border: 1px solid #d2d6dc; padding: 8px 10px; text-align: left; }')
+    $null = $sb.AppendLine('th { background-color: #e4ebf2; }')
+    $null = $sb.AppendLine('.sev-critical { background-color: #fee2e2; }')
+    $null = $sb.AppendLine('.sev-high { background-color: #fef3c7; }')
+    $null = $sb.AppendLine('.sev-medium { background-color: #e0f2fe; }')
+    $null = $sb.AppendLine('.sev-low { background-color: #ecfdf5; }')
+    $null = $sb.AppendLine('.sev-default { background-color: #e5e7eb; }')
+    $null = $sb.AppendLine('.meta { color: #52606d; font-size: 0.9em; margin-bottom: 1.4em; }')
+    $null = $sb.AppendLine('.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }')
+    $null = $sb.AppendLine('.summary-card { background: linear-gradient(135deg, #2563eb, #1e3a8a); color: #fff; padding: 18px; border-radius: 12px; box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22); }')
+    $null = $sb.AppendLine('.summary-card.secondary { background: linear-gradient(135deg, #059669, #047857); box-shadow: 0 12px 24px rgba(5, 150, 105, 0.22); }')
+    $null = $sb.AppendLine('.summary-card h3 { margin: 0; font-weight: 600; font-size: 1rem; }')
+    $null = $sb.AppendLine('.summary-card .value { font-size: 2.6rem; margin-top: 8px; font-weight: 700; }')
+    $null = $sb.AppendLine('.summary-card .subtext { font-size: 0.85rem; opacity: 0.85; margin-top: 6px; }')
+    $null = $sb.AppendLine('.severity-board { background: #fff; border-radius: 12px; padding: 18px; box-shadow: 0 12px 22px rgba(15, 23, 42, 0.08); margin-top: 20px; }')
+    $null = $sb.AppendLine('.severity-board h3 { margin: 0 0 12px 0; font-size: 1.1rem; }')
+    $null = $sb.AppendLine('.meter { margin-bottom: 10px; }')
+    $null = $sb.AppendLine('.meter-label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px; }')
+    $null = $sb.AppendLine('.meter-bar { height: 10px; border-radius: 6px; overflow: hidden; background: #e5e7eb; }')
+    $null = $sb.AppendLine('.meter-fill { height: 10px; border-radius: 6px; transition: width 0.4s ease; }')
+    $null = $sb.AppendLine('.cards { margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }')
+    $null = $sb.AppendLine('.card { background: #fff; border-radius: 12px; padding: 18px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08); display: flex; flex-direction: column; gap: 10px; }')
+    $null = $sb.AppendLine('.card .title { font-size: 1.05rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }')
+    $null = $sb.AppendLine('.chip { padding: 2px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: #fff; }')
+    $null = $sb.AppendLine('.info { font-size: 0.9rem; color: #4b5563; }')
+    $null = $sb.AppendLine('.target { font-size: 0.85rem; color: #2563eb; word-break: break-word; }')
+    $null = $sb.AppendLine('</style>')
+    $null = $sb.AppendLine('</head>')
+    $null = $sb.AppendLine('<body>')
+    $null = $sb.AppendLine('<h1>MFA Check &amp; Steer Summary</h1>')
+    $null = $sb.AppendLine(("<div class=""meta"">Generated UTC: {0}</div>" -f (& $encode (Get-Date).ToUniversalTime().ToString('u'))))
+
+    $null = $sb.AppendLine('<div class="summary-grid">')
+    $null = $sb.AppendLine(('<div class="summary-card"><h3>Total Detections</h3><div class="value">{0}</div><div class="subtext">Signals requiring investigation</div></div>' -f $totalDetections))
+    $null = $sb.AppendLine(('<div class="summary-card secondary"><h3>Playbooks Triggered</h3><div class="value">{0}</div><div class="subtext">Automated responses executed</div></div>' -f $totalPlaybooks))
+    $null = $sb.AppendLine('</div>')
+
+    $null = $sb.AppendLine('<div class="severity-board">')
+    $null = $sb.AppendLine('<h3>Detection Severity Mix</h3>')
+    foreach ($sev in $severityOrder) {
+        if (-not $detSeverityCounts.Contains($sev)) { continue }
+        $count = $detSeverityCounts[$sev]
+        $percent = [math]::Round(($count / $detScale) * 100, 1)
+        $null = $sb.AppendLine('<div class="meter">')
+        $null = $sb.AppendLine(('<div class="meter-label"><span>{0}</span><span>{1} ({2}%)</span></div>' -f (& $encode $sev), $count, $percent))
+        $null = $sb.AppendLine('<div class="meter-bar">')
+        $null = $sb.AppendLine(('<div class="meter-fill {0}" style="width: {1}%;"></div>' -f (& $severityClass $sev), [math]::Max($percent, 0)))
+        $null = $sb.AppendLine('</div></div>')
+    }
+    $null = $sb.AppendLine('<h3>Playbook Severity Mix</h3>')
+    foreach ($sev in $severityOrder) {
+        if (-not $playSeverityCounts.Contains($sev)) { continue }
+        $count = $playSeverityCounts[$sev]
+        $percent = [math]::Round(($count / $playScale) * 100, 1)
+        $null = $sb.AppendLine('<div class="meter">')
+        $null = $sb.AppendLine(('<div class="meter-label"><span>{0}</span><span>{1} ({2}%)</span></div>' -f (& $encode $sev), $count, $percent))
+        $null = $sb.AppendLine('<div class="meter-bar">')
+        $null = $sb.AppendLine(('<div class="meter-fill {0}" style="width: {1}%;"></div>' -f (& $severityClass $sev), [math]::Max($percent, 0)))
+        $null = $sb.AppendLine('</div></div>')
+    }
+    $null = $sb.AppendLine('</div>')
+
+    $null = $sb.AppendLine("<h2>Detections ({0})</h2>" -f $detCollection.Count)
+    if ($detCollection.Count -gt 0) {
+        $null = $sb.AppendLine('<table>')
+        $null = $sb.AppendLine('<thead><tr><th>Detection ID</th><th>User</th><th>Severity</th><th>Control Owner</th><th>Response SLA (hrs)</th></tr></thead>')
+        $null = $sb.AppendLine('<tbody>')
+        foreach ($det in $detCollection) {
+            $severity = if ($det.PSObject.Properties['Severity']) { [string]$det.Severity } else { '' }
+            $class = switch ($severity.ToLowerInvariant()) {
+                'critical' { 'sev-critical' }
+                'high' { 'sev-high' }
+                'medium' { 'sev-medium' }
+                default { 'sev-low' }
+            }
+            $detectionId = if ($det.PSObject.Properties['DetectionId']) { [string]$det.DetectionId } else { '' }
+            $user = if ($det.PSObject.Properties['UserPrincipalName']) { [string]$det.UserPrincipalName } else { '' }
+            $controlOwner = if ($det.PSObject.Properties['ControlOwner']) { [string]$det.ControlOwner } else { '' }
+            $sla = if ($det.PSObject.Properties['ResponseSlaHours']) { [string]$det.ResponseSlaHours } else { '' }
+
+            $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td></tr>" -f
+                $class,
+                (& $encode $detectionId),
+                (& $encode $user),
+                (& $encode $severity),
+                (& $encode $controlOwner),
+                (& $encode $sla)
+            ))
+        }
+        $null = $sb.AppendLine('</tbody></table>')
+        $null = $sb.AppendLine('<div class="cards">')
+        foreach ($det in $detCollection) {
+            $severity = if ($det.PSObject.Properties['Severity']) { [string]$det.Severity } else { 'Informational' }
+            $class = & $severityClass $severity
+            $detectionId = if ($det.PSObject.Properties['DetectionId']) { [string]$det.DetectionId } else { 'Unknown Detection' }
+            $user = if ($det.PSObject.Properties['UserPrincipalName']) { [string]$det.UserPrincipalName } else { 'Unknown user' }
+            $controlOwner = if ($det.PSObject.Properties['ControlOwner']) { [string]$det.ControlOwner } else { 'Unassigned' }
+            $sla = if ($det.PSObject.Properties['ResponseSlaHours']) { [string]$det.ResponseSlaHours } else { '—' }
+
+            $null = $sb.AppendLine('<div class="card">')
+            $null = $sb.AppendLine(('<div class="title"><span>{0}</span><span class="chip {1}">{2}</span></div>' -f (& $encode $detectionId), $class, (& $encode $severity)))
+            $null = $sb.AppendLine(('<div class="info"><strong>User:</strong> {0}</div>' -f (& $encode $user)))
+            $null = $sb.AppendLine(('<div class="info"><strong>Control owner:</strong> {0}</div>' -f (& $encode $controlOwner)))
+            $null = $sb.AppendLine(('<div class="info"><strong>Response SLA:</strong> {0} hour(s)</div>' -f (& $encode $sla)))
+            $null = $sb.AppendLine('</div>')
+        }
+        $null = $sb.AppendLine('</div>')
+    }
+    else {
+        $null = $sb.AppendLine('<p>No detections recorded for this period.</p>')
+    }
+
+    $null = $sb.AppendLine("<h2>Playbook Actions ({0})</h2>" -f $playCollection.Count)
+    if ($playCollection.Count -gt 0) {
+        $null = $sb.AppendLine('<table>')
+        $null = $sb.AppendLine('<thead><tr><th>Playbook</th><th>User</th><th>Severity</th><th>Ticket Target</th><th>Notification Target</th></tr></thead>')
+        $null = $sb.AppendLine('<tbody>')
+        foreach ($entry in $playCollection) {
+            $playbook = $entry.Playbook
+            $severity = if ($playbook -and $playbook.PSObject.Properties['Severity']) { [string]$playbook.Severity } else { '' }
+            $class = switch ($severity.ToLowerInvariant()) {
+                'critical' { 'sev-critical' }
+                'high' { 'sev-high' }
+                'medium' { 'sev-medium' }
+                default { 'sev-low' }
+            }
+
+            $ticketTarget = if ($entry.TicketTarget) { $entry.TicketTarget } else { 'Not sent' }
+            $notificationTarget = if ($entry.NotificationTarget) { $entry.NotificationTarget } else { 'Not sent' }
+            $playbookId = if ($playbook -and $playbook.PSObject.Properties['PlaybookId']) { [string]$playbook.PlaybookId } else { '' }
+            $user = if ($playbook -and $playbook.PSObject.Properties['UserPrincipalName']) { [string]$playbook.UserPrincipalName } else { '' }
+
+            $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td></tr>" -f
+                $class,
+                (& $encode $playbookId),
+                (& $encode $user),
+                (& $encode $severity),
+                (& $encode $ticketTarget),
+                (& $encode $notificationTarget)
+            ))
+        }
+        $null = $sb.AppendLine('</tbody></table>')
+        $null = $sb.AppendLine('<div class="cards">')
+        foreach ($entry in $playCollection) {
+            $playbook = $entry.Playbook
+            $severity = if ($playbook -and $playbook.PSObject.Properties['Severity']) { [string]$playbook.Severity } else { 'Informational' }
+            $class = & $severityClass $severity
+            $playbookId = if ($playbook -and $playbook.PSObject.Properties['PlaybookId']) { [string]$playbook.PlaybookId } else { 'Playbook' }
+            $user = if ($playbook -and $playbook.PSObject.Properties['UserPrincipalName']) { [string]$playbook.UserPrincipalName } else { 'Unknown user' }
+            $ticketTarget = if ($entry.TicketTarget) { [string]$entry.TicketTarget } else { 'Not sent' }
+            $notificationTarget = if ($entry.NotificationTarget) { [string]$entry.NotificationTarget } else { 'Not sent' }
+
+            $null = $sb.AppendLine('<div class="card">')
+            $null = $sb.AppendLine(('<div class="title"><span>{0}</span><span class="chip {1}">{2}</span></div>' -f (& $encode $playbookId), $class, (& $encode $severity)))
+            $null = $sb.AppendLine(('<div class="info"><strong>User:</strong> {0}</div>' -f (& $encode $user)))
+            $null = $sb.AppendLine(('<div class="info"><strong>Ticket:</strong></div><div class="target">{0}</div>' -f (& $encode $ticketTarget)))
+            $null = $sb.AppendLine(('<div class="info"><strong>Notification:</strong></div><div class="target">{0}</div>' -f (& $encode $notificationTarget)))
+            $null = $sb.AppendLine('</div>')
+        }
+        $null = $sb.AppendLine('</div>')
+    }
+    else {
+        $null = $sb.AppendLine('<p>No playbook actions recorded for this period.</p>')
+    }
+
+    $null = $sb.AppendLine('</body></html>')
+
+    $html = $sb.ToString()
+    $writtenPath = $null
+    if ($Path) {
+        $directory = Split-Path -Parent $Path
+        if ($directory -and -not (Test-Path $directory)) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+        }
+        Write-Progress -Activity 'Generating MFA HTML report' -Status 'Writing output' -PercentComplete 80
+        $html | Set-Content -Path $Path -Encoding UTF8
+        try {
+            $writtenPath = (Resolve-Path -Path $Path).ProviderPath
+        }
+        catch {
+            $writtenPath = $Path
+        }
+
+        if ($OpenInBrowser) {
+            Write-Verbose ("Opening HTML report in default browser: {0}" -f $writtenPath)
+            try {
+                Start-Process -FilePath $writtenPath -ErrorAction Stop
+            }
+            catch {
+                Write-Warning ("Failed to open HTML report in browser: {0}" -f $_.Exception.Message)
+            }
+        }
+    }
+    Write-Progress -Activity 'Generating MFA HTML report' -Completed
+
+    return [pscustomobject]@{
+        Html            = $html
+        Path            = $writtenPath
+        DetectionCount  = $detCollection.Count
+        PlaybookCount   = $playCollection.Count
+    }
+}
+
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification, Invoke-MfaPlaybookOutputs, New-MfaHtmlReport
+
+function Invoke-MfaScenarioReport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $ScenarioPath,
+
+        [string] $OutputDirectory,
+        [switch] $SkipAuthorization,
+        [switch] $OpenReport,
+        [switch] $PassThru
+    )
+
+    if (-not (Test-Path -Path $ScenarioPath)) {
+        throw "Scenario file '$ScenarioPath' was not found."
+    }
+
+    Write-Verbose ("Loading scenario from '{0}'." -f $ScenarioPath)
+    $rawScenario = Get-Content -Path $ScenarioPath -Raw | ConvertFrom-Json
+
+    $signIns = @()
+    if ($rawScenario.PSObject.Properties['SignIns']) {
+        $signIns = @($rawScenario.SignIns) | Where-Object { $_ }
+    }
+
+    $registrations = @()
+    if ($rawScenario.PSObject.Properties['Registrations']) {
+        $registrations = @($rawScenario.Registrations) | Where-Object { $_ }
+    }
+
+    $roleAssignments = @()
+    if ($rawScenario.PSObject.Properties['RoleAssignments']) {
+        $roleAssignments = @($rawScenario.RoleAssignments) | Where-Object { $_ }
+    }
+
+    if (-not $OutputDirectory) {
+        $moduleRoot = Split-Path -Parent $PSScriptRoot
+        $OutputDirectory = Join-Path -Path $moduleRoot -ChildPath 'reports'
+    }
+
+    if (-not (Test-Path -Path $OutputDirectory)) {
+        Write-Verbose ("Creating output directory '{0}'." -f $OutputDirectory)
+        New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
+    }
+
+    $ticketDirectory = Join-Path -Path $OutputDirectory -ChildPath 'tickets'
+    $notificationDirectory = Join-Path -Path $OutputDirectory -ChildPath 'notifications'
+    foreach ($dir in @($ticketDirectory, $notificationDirectory)) {
+        if (-not (Test-Path -Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        }
+    }
+
+    Write-Progress -Activity 'Processing scenario' -Status 'Evaluating detections' -PercentComplete 20
+
+    $referenceTime = Get-Date
+    if ($rawScenario.PSObject.Properties['ReferenceTime'] -and $rawScenario.ReferenceTime) {
+        $referenceTime = [datetime]$rawScenario.ReferenceTime
+    }
+    elseif ($signIns.Count -gt 0) {
+        $referenceTime = ($signIns | ForEach-Object { [datetime]$_.CreatedDateTime } | Sort-Object)[-1]
+    }
+
+    $allDetections = @()
+    if ($registrations.Count -gt 0) {
+        $allDetections += Invoke-MfaDetectionDormantMethod -RegistrationData $registrations -ReferenceTime $referenceTime
+    }
+    if ($signIns.Count -gt 0) {
+        $allDetections += Invoke-MfaDetectionHighRiskSignin -SignInData $signIns -ReferenceTime $referenceTime
+        $allDetections += Invoke-MfaDetectionRepeatedMfaFailure -SignInData $signIns -ReferenceTime $referenceTime
+        $allDetections += Invoke-MfaDetectionImpossibleTravelSuccess -SignInData $signIns -ReferenceTime $referenceTime
+    }
+    if ($roleAssignments.Count -gt 0) {
+        $allDetections += Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $roleAssignments -RegistrationData $registrations
+    }
+    if ($signIns.Count -gt 0 -or $registrations.Count -gt 0) {
+        $allDetections += Invoke-MfaSuspiciousActivityScore -SignInData $signIns -RegistrationData $registrations -ReferenceTime $referenceTime
+    }
+
+    $allDetections = @($allDetections | Where-Object { $_ })
+    Write-Verbose ("Detections discovered: {0}" -f $allDetections.Count)
+
+    Write-Progress -Activity 'Processing scenario' -Status 'Planning playbooks' -PercentComplete 50
+
+    $playbookPlans = @()
+    $playbookParams = @{
+        SkipAuthorization   = $SkipAuthorization.IsPresent
+        SkipGraphValidation = $true
+        WhatIf              = $true
+        Verbose             = $false
+    }
+
+    foreach ($detection in $allDetections) {
+        if (-not $detection -or -not $detection.DetectionId) { continue }
+        $plan = $null
+        switch ($detection.DetectionId) {
+            'MFA-DET-001' { $plan = Invoke-MfaPlaybookResetDormantMethod @playbookParams -Detection $detection }
+            'MFA-DET-002' { $plan = Invoke-MfaPlaybookContainHighRiskSignin @playbookParams -Detection $detection }
+            'MFA-DET-003' { $plan = Invoke-MfaPlaybookEnforcePrivilegedRoleMfa @playbookParams -Detection $detection }
+            'MFA-DET-004' { $plan = Invoke-MfaPlaybookContainRepeatedFailure @playbookParams -Detection $detection }
+            'MFA-DET-005' { $plan = Invoke-MfaPlaybookInvestigateImpossibleTravel @playbookParams -Detection $detection }
+        }
+
+        if ($plan) {
+            $playbookPlans += $plan
+        }
+    }
+
+    foreach ($score in $allDetections | Where-Object { $_.PSObject.Properties['Score'] }) {
+        $plan = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score @playbookParams
+        if ($plan) {
+            $playbookPlans += $plan
+        }
+    }
+
+    $playbookPlans = @($playbookPlans | Where-Object { $_ })
+    Write-Verbose ("Playbook plans generated: {0}" -f $playbookPlans.Count)
+
+    Write-Progress -Activity 'Processing scenario' -Status 'Collecting playbook outputs' -PercentComplete 70
+
+    $playbookOutputs = @()
+    foreach ($plan in $playbookPlans) {
+        $ticketFile = Join-Path -Path $ticketDirectory -ChildPath ("ticket-{0}-{1}.json" -f $plan.PlaybookId, ([guid]::NewGuid().ToString('N')))
+        $notificationFile = Join-Path -Path $notificationDirectory -ChildPath ("notification-{0}-{1}.json" -f $plan.PlaybookId, ([guid]::NewGuid().ToString('N')))
+        $playbookOutputs += Invoke-MfaPlaybookOutputs -Playbook $plan -TicketOutFile $ticketFile -NotificationOutFile $notificationFile -PassThru
+    }
+
+    $timestamp = (Get-Date).ToString('yyyyMMddTHHmmss')
+    $htmlPath = Join-Path -Path $OutputDirectory -ChildPath ("scenario-report-{0}.html" -f $timestamp)
+    $report = New-MfaHtmlReport -Detections $allDetections -Playbooks $playbookOutputs -Path $htmlPath -OpenInBrowser:$OpenReport
+
+    Write-Verbose ("HTML report saved to: {0}" -f $report.Path)
+
+    $result = [pscustomobject]@{
+        ScenarioPath     = (Resolve-Path -Path $ScenarioPath).ProviderPath
+        DetectionCount   = $allDetections.Count
+        PlaybookCount    = $playbookOutputs.Count
+        HtmlReport       = $report.Path
+        TicketOutputs    = @($playbookOutputs | ForEach-Object { $_.TicketResult.Target })
+        NotificationOutputs = @($playbookOutputs | ForEach-Object { $_.NotificationResult.Target })
+        OutputDirectory  = $OutputDirectory
+    }
+
+    if ($PassThru) {
+        return $result
+    }
+    else {
+        $result.HtmlReport
+    }
+}

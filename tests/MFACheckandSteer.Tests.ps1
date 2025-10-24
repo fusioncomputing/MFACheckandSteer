@@ -646,6 +646,135 @@ Describe 'Invoke-MfaPlaybookOutputs' {
     }
 }
 
+Describe 'Invoke-MfaScenarioReport' {
+    InModuleScope MFACheckandSteer {
+        It 'generates outputs and HTML report for a scenario' {
+            $scenarioPath = Join-Path -Path $TestDrive -ChildPath 'scenario.json'
+            @{
+                SignIns        = @()
+                Registrations  = @(@{ UserPrincipalName = 'scenario@example.com' })
+                RoleAssignments = @()
+            } | ConvertTo-Json -Depth 5 | Set-Content -Path $scenarioPath -Encoding UTF8
+
+            Mock -CommandName Invoke-MfaDetectionDormantMethod -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    DetectionId       = 'MFA-DET-001'
+                    UserPrincipalName = 'scenario@example.com'
+                    Severity          = 'High'
+                    ControlOwner      = 'SecOps IAM'
+                    ResponseSlaHours  = 4
+                }
+            }
+            foreach ($fn in @('Invoke-MfaDetectionHighRiskSignin','Invoke-MfaDetectionRepeatedMfaFailure','Invoke-MfaDetectionImpossibleTravelSuccess','Invoke-MfaDetectionPrivilegedRoleNoMfa','Invoke-MfaSuspiciousActivityScore')) {
+                Mock -CommandName $fn -ModuleName MFACheckandSteer -MockWith { @() }
+            }
+
+            Mock -CommandName Invoke-MfaPlaybookResetDormantMethod -ModuleName MFACheckandSteer -MockWith {
+                param($Detection)
+                [pscustomobject]@{
+                    PlaybookId        = 'MFA-PL-001'
+                    DetectionId       = $Detection.DetectionId
+                    UserPrincipalName = $Detection.UserPrincipalName
+                    Severity          = $Detection.Severity
+                    ExecutedSteps     = @('Validate context')
+                }
+            }
+            foreach ($fn in @('Invoke-MfaPlaybookContainHighRiskSignin','Invoke-MfaPlaybookEnforcePrivilegedRoleMfa','Invoke-MfaPlaybookContainRepeatedFailure','Invoke-MfaPlaybookInvestigateImpossibleTravel','Invoke-MfaPlaybookTriageSuspiciousScore')) {
+                Mock -CommandName $fn -ModuleName MFACheckandSteer -MockWith { $null }
+            }
+
+            Mock -CommandName Start-Process -ModuleName MFACheckandSteer
+
+            $outputDir = Join-Path -Path $TestDrive -ChildPath 'scenario-report'
+            $result = Invoke-MfaScenarioReport -ScenarioPath $scenarioPath -OutputDirectory $outputDir -OpenReport -SkipAuthorization -PassThru
+
+            $result.DetectionCount | Should -Be 1
+            $result.PlaybookCount | Should -Be 1
+            Test-Path -Path $result.HtmlReport | Should -BeTrue
+            $result.TicketOutputs | Should -HaveCount 1
+            $result.NotificationOutputs | Should -HaveCount 1
+
+            Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 1 -Scope It -ParameterFilter {
+                $FilePath -eq $result.HtmlReport
+            }
+        }
+    }
+}
+
+Describe 'New-MfaHtmlReport' {
+    InModuleScope MFACheckandSteer {
+        It 'creates HTML summary with detections and playbooks' {
+            $detections = @(
+                [pscustomobject]@{
+                    DetectionId        = 'MFA-DET-010'
+                    UserPrincipalName  = 'htmluser@example.com'
+                    Severity           = 'High'
+                    ControlOwner       = 'SecOps IAM'
+                    ResponseSlaHours   = 8
+                }
+            )
+
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-010'
+                DetectionId       = 'MFA-DET-010'
+                UserPrincipalName = 'htmluser@example.com'
+                Severity          = 'High'
+                ExecutedSteps     = @('Notify user')
+            }
+
+            $ticketPath = Join-Path -Path $TestDrive -ChildPath 'html-ticket.json'
+            $notificationPath = Join-Path -Path $TestDrive -ChildPath 'html-notification.json'
+            $reportPath = Join-Path -Path $TestDrive -ChildPath 'mfa-report.html'
+
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+
+                Mock -CommandName Start-Process -ModuleName MFACheckandSteer
+                $summary = Invoke-MfaPlaybookOutputs -Playbook $playbook -TicketOutFile $ticketPath -NotificationOutFile $notificationPath -PassThru
+                $report = New-MfaHtmlReport -Detections $detections -Playbooks $summary -Path $reportPath
+
+                $report.DetectionCount | Should -Be 1
+                $report.PlaybookCount | Should -Be 1
+                $report.Path | Should -Not -BeNullOrEmpty
+                Test-Path -Path $report.Path | Should -BeTrue
+
+                $html = Get-Content -Path $report.Path -Raw
+                $html | Should -Match 'MFA-DET-010'
+                $html | Should -Match 'MFA-PL-010'
+                $html | Should -Match 'htmluser@example.com'
+
+                Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 0 -Scope It
+            }
+            finally {
+                Remove-Item -Path $ticketPath -ErrorAction SilentlyContinue
+                Remove-Item -Path $notificationPath -ErrorAction SilentlyContinue
+                Remove-Item -Path $reportPath -ErrorAction SilentlyContinue
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+
+        It 'launches the default browser when OpenInBrowser is specified' {
+            $reportPath = Join-Path -Path $TestDrive -ChildPath 'mfa-report-open.html'
+            Mock -CommandName Start-Process -ModuleName MFACheckandSteer
+
+            try {
+                $report = New-MfaHtmlReport -Detections @() -Playbooks @() -Path $reportPath -OpenInBrowser
+                $report.Path | Should -Be $reportPath
+                Test-Path -Path $reportPath | Should -BeTrue
+
+                Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 1 -Scope It -ParameterFilter {
+                    $FilePath -eq $reportPath
+                }
+            }
+            finally {
+                Remove-Item -Path $reportPath -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 if ($null -ne $script:OriginalPlaybookRoles) {
     [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $script:OriginalPlaybookRoles, 'Process')
 }

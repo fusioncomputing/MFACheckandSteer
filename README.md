@@ -48,6 +48,8 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `Invoke-MfaPlaybookInvestigateImpossibleTravel` - Apply playbook `MFA-PL-006` when `MFA-DET-005` flags suspicious impossible travel successes.
 - `Invoke-MfaPlaybookTriageSuspiciousScore` - Apply playbook `MFA-PL-004` to triage aggregated suspicious activity scores.
 - `Invoke-MfaPlaybookOutputs` - Run ticketing and notification helpers in one step (defaults to local file delivery when endpoints aren’t configured).
+- `New-MfaHtmlReport` - Render detections and playbook actions into an HTML summary (optionally writing the output to disk and launching it with `-OpenInBrowser`).
+- `Invoke-MfaScenarioReport` - Replay a scenario JSON, run detections + playbooks, capture ticket/notification payloads, and build an HTML summary in a single command.
 - All detection and scoring outputs include `FrameworkTags`, `NistFunctions`, and `ReportingTags` to satisfy Phase 4.3 governance requirements (see `docs/detections/phase-4-framework-mapping.md`).
 
 ## Sample Data
