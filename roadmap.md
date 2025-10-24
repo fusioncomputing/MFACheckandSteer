@@ -48,6 +48,11 @@
 - 6.5 Establish feedback loops (issue templates, RFC process, stakeholder review cadence) so SecOps teams can request enhancements effectively.
 - 6.6 Run UX research checkpoints (interviews, usability tests), document accessibility expectations, and perform internal documentation peer reviews before publishing.
 - 6.7 Generate HTML-based summary reports that highlight detection results and playbook actions for quick analyst review (mirrors CLI output but adds visual cues for findings).
+- 6.8 Refresh the report header/summary grid to introduce tenant-brandable styling, time-range context (lookback window, tenant name), and hover tooltips on the cards so execs can interpret totals without reading the body text.
+- 6.9 Enhance the severity distribution board with inline sparklines and callouts for the highest-volume severity, plus a “top contributor” list showing which detections fill each band (links to the table rows).
+- 6.10 Expand the detections table with inline remediation badges (“Run MFA-PL-004 – Triage Suspicious Score”), filter chips (Severity/User/Control Owner), and a collapsible evidence drawer that surfaces failure reasons, risk details, and Graph correlation IDs.
+- 6.11 Redesign the playbook cards into responsive tiles that show execution state (Success/WhatIf/Error), key steps completed, and deep links to the corresponding ticket/notification artifacts so analysts can jump directly to evidence.
+- 6.12 Introduce best-practice callouts with severity-colored sidebars, quick-action checklists, and references to the governance catalog so policy owners can track follow-up work straight from the report.
 
 ## Phase 7 - Hardening, Compliance, and Release
 - 7.1 Run end-to-end security reviews: static code analysis, dependency audits, credential hygiene validation, and threat modeling refresh.

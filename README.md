@@ -52,6 +52,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `Invoke-MfaScenarioReport` - Replay a scenario JSON, run detections + playbooks, capture ticket/notification payloads, build an HTML summary, and return any best-practice notes discovered during the run.
 - `Invoke-MfaTenantReport` - Pull live Microsoft Entra sign-ins/registrations for a rolling window (optionally include privileged role assignments), run detections + playbooks, and emit the HTML summary wired to production telemetry.
 - All detection and scoring outputs include `FrameworkTags`, `NistFunctions`, and `ReportingTags` to satisfy Phase 4.3 governance requirements (see `docs/detections/phase-4-framework-mapping.md`).
+- See `docs/detections/rules/MFA-SCORE-suspicious-activity-score.md` for a deep dive into the composite suspicious-score detection, including investigation steps when dormant identities (e.g., ex-employees) suddenly reappear in the report.
 
 ## Sample Data
 - Run `pwsh scripts/replay-samples.ps1` to view the synthetic MFA datasets included under `data/samples/`.
