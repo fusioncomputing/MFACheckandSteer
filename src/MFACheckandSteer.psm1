@@ -3638,6 +3638,45 @@ function New-MfaHtmlReport {
         }
     }
 
+    $playbookFriendlyNames = @{
+        'MFA-PL-001' = 'Reset Dormant Method'
+        'MFA-PL-002' = 'Contain High-Risk Sign-in'
+        'MFA-PL-003' = 'Enforce Privileged Role MFA'
+        'MFA-PL-004' = 'Triage Suspicious Score'
+        'MFA-PL-005' = 'Contain Repeated MFA Failures'
+        'MFA-PL-006' = 'Investigate Impossible Travel'
+    }
+
+    $defaultPlaybookRecommendations = @{
+        'MFA-DET-001' = @('MFA-PL-001')
+        'MFA-DET-002' = @('MFA-PL-002')
+        'MFA-DET-003' = @('MFA-PL-003')
+        'MFA-DET-004' = @('MFA-PL-005')
+        'MFA-DET-005' = @('MFA-PL-006')
+        'MFA-SCORE'   = @('MFA-PL-004')
+    }
+
+    $playbookLookup = @{}
+    foreach ($entry in $playCollection) {
+        $playbook = $entry.Playbook
+        if (-not $playbook) { continue }
+
+        $candidateKeys = @()
+        foreach ($propName in @('DetectionId','SignalId')) {
+            if ($playbook.PSObject.Properties[$propName] -and $playbook.$propName) {
+                $candidateKeys += [string]$playbook.$propName
+            }
+        }
+        $candidateKeys = @($candidateKeys | Where-Object { $_ }) | Sort-Object -Unique
+
+        foreach ($key in $candidateKeys) {
+            if (-not $playbookLookup.ContainsKey($key)) {
+                $playbookLookup[$key] = @()
+            }
+            $playbookLookup[$key] += $playbook
+        }
+    }
+
     $bpCollection = @()
     if ($BestPractices) {
         $bpCollection = @($BestPractices | Where-Object { $_ })
@@ -3953,8 +3992,31 @@ function New-MfaHtmlReport {
             if ($det.PSObject.Properties['CorrelationId'] -and $det.CorrelationId) {
                 return ("Correlation ID: {0}" -f $det.CorrelationId)
             }
-
             return ''
+        }
+        $playbookSummary = {
+            param([string[]] $PlaybookIds)
+
+            if (-not $PlaybookIds -or $PlaybookIds.Count -eq 0) {
+                return $null
+            }
+
+            $unique = @($PlaybookIds | Where-Object { $_ }) | Sort-Object -Unique
+            if ($unique.Count -eq 0) {
+                return $null
+            }
+
+            $names = foreach ($id in $unique) {
+                if ($playbookFriendlyNames.ContainsKey($id)) {
+                    "{0} – {1}" -f $id, $playbookFriendlyNames[$id]
+                }
+                else {
+                    $id
+                }
+            }
+
+            $suffix = if ($names.Count -gt 1) { 's' } else { '' }
+            return ("Recommended playbook{0}: {1}" -f $suffix, ($names -join ', '))
         }
 
         foreach ($det in $detCollection) {
@@ -3985,6 +4047,41 @@ function New-MfaHtmlReport {
             $detailText = & $detectionDetails $det
             if (-not $detailText) {
                 $detailText = 'Additional context not supplied.'
+            }
+            $detKeys = @()
+            if ($det.PSObject.Properties['DetectionId'] -and $det.DetectionId) { $detKeys += [string]$det.DetectionId }
+            if ($det.PSObject.Properties['SignalId'] -and $det.SignalId) { $detKeys += [string]$det.SignalId }
+            if ($detectionId) { $detKeys += [string]$detectionId }
+            $detKeys = @($detKeys | Where-Object { $_ }) | Sort-Object -Unique
+
+            $playbookIds = @()
+            foreach ($key in $detKeys) {
+                if ($playbookLookup.ContainsKey($key)) {
+                    foreach ($play in $playbookLookup[$key]) {
+                        if ($play -and $play.PSObject.Properties['PlaybookId'] -and $play.PlaybookId) {
+                            $playbookIds += [string]$play.PlaybookId
+                        }
+                    }
+                }
+            }
+            if ($playbookIds.Count -eq 0) {
+                foreach ($key in $detKeys) {
+                    if ($defaultPlaybookRecommendations.ContainsKey($key)) {
+                        $playbookIds += $defaultPlaybookRecommendations[$key]
+                    }
+                }
+            }
+            $playbookIds = @($playbookIds | Where-Object { $_ }) | Sort-Object -Unique
+            $remediationText = $null
+            if ($playbookIds.Count -gt 0) {
+                $remediationText = & $playbookSummary $playbookIds
+            }
+
+            if ($remediationText) {
+                if ($detailText -and ($detailText.Trim().EndsWith('.') -eq $false)) {
+                    $detailText = $detailText.Trim() + '.'
+                }
+                $detailText = ($detailText.Trim() + ' ' + $remediationText).Trim()
             }
 
             $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td><td>{6}</td></tr>" -f
