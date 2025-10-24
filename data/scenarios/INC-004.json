@@ -1,0 +1,24 @@
+{
+  "ScenarioId": "INC-004",
+  "Name": "Privileged Admin Without MFA",
+  "ReferenceTime": "2025-11-04T10:00:00Z",
+  "Description": "Privileged administrator lacks any registered MFA methods, triggering privileged role enforcement remediation.",
+  "RoleAssignments": [
+    {
+      "PrincipalId": "44444444-4444-4444-4444-444444444444",
+      "UserPrincipalName": "privadmin@example.com",
+      "UserDisplayName": "Privileged Admin",
+      "RoleDefinitionId": "62e90394-69f5-4237-9190-012177145e10",
+      "RoleDefinitionDisplayName": "Global Administrator"
+    }
+  ],
+  "Registrations": [],
+  "Expectations": {
+    "Detections": [
+      {
+        "DetectionId": "MFA-DET-003",
+        "UserPrincipalName": "privadmin@example.com"
+      }
+    ]
+  }
+}

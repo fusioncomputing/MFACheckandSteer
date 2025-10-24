@@ -609,6 +609,99 @@ Describe 'Invoke-MfaSuspiciousActivityScore' {
     }
 }
 
+Describe 'Invoke-MfaDetectionPrivilegedRoleNoMfa' {
+    InModuleScope MFACheckandSteer {
+        It 'flags privileged users without MFA methods' {
+            $assignments = @(
+                [pscustomobject]@{
+                    PrincipalId              = 'user-001'
+                    UserPrincipalName        = 'pa@example.com'
+                    UserDisplayName          = 'Privileged Admin'
+                    RoleDefinitionId         = '62e90394-69f5-4237-9190-012177145e10'
+                    RoleDefinitionDisplayName = 'Global Administrator'
+                }
+            )
+
+            $registrations = @(
+                [pscustomobject]@{
+                    UserId              = 'user-002'
+                    UserPrincipalName   = 'other@example.com'
+                    IsUsable            = $true
+                }
+            )
+
+            $results = Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $assignments -RegistrationData $registrations
+            $results | Should -HaveCount 1
+            $results[0].DetectionId | Should -Be 'MFA-DET-003'
+            $results[0].UserPrincipalName | Should -Be 'pa@example.com'
+            $results[0].PrivilegedRoles | Should -Contain 'Global Administrator'
+            $results[0].ControlOwner | Should -Be 'SecOps IAM Team'
+            $results[0].ResponseSlaHours | Should -Be 24
+        }
+
+        It 'respects privileged role overrides from configuration' {
+            $tempPath = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ("mfa-config-{0}.json" -f ([Guid]::NewGuid()))
+            $override = @{
+                'MFA-DET-003' = @{
+                    PrivilegedRoleIds = @('custom-role')
+                }
+            } | ConvertTo-Json -Depth 5
+            $override | Set-Content -Path $tempPath -Encoding UTF8
+
+            $originalPath = [Environment]::GetEnvironmentVariable('MfaDetectionConfigurationPath', 'Process')
+        try {
+            $env:MfaDetectionConfigurationPath = $tempPath
+            Get-MfaDetectionConfiguration -Refresh | Out-Null
+
+            $assignments = @(
+                [pscustomobject]@{
+                    PrincipalId              = 'user-003'
+                    UserPrincipalName        = 'custom@example.com'
+                        RoleDefinitionId         = 'custom-role'
+                        RoleDefinitionDisplayName = 'Custom Privileged Role'
+                    }
+                )
+
+                $results = Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $assignments -RegistrationData @()
+                $results | Should -HaveCount 1
+                $results[0].PrivilegedRoles | Should -Contain 'Custom Privileged Role'
+            }
+            finally {
+                if ($originalPath) {
+                    $env:MfaDetectionConfigurationPath = $originalPath
+                }
+                else {
+                    Remove-Item Env:\MfaDetectionConfigurationPath -ErrorAction SilentlyContinue
+                }
+                Get-MfaDetectionConfiguration -Refresh | Out-Null
+                Remove-Item -Path $tempPath -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'does not flag users with usable MFA' {
+            $assignments = @(
+                [pscustomobject]@{
+                    PrincipalId              = 'user-004'
+                    UserPrincipalName        = 'healthy@example.com'
+                    RoleDefinitionId         = '62e90394-69f5-4237-9190-012177145e10'
+                    RoleDefinitionDisplayName = 'Global Administrator'
+                }
+            )
+
+            $registrations = @(
+                [pscustomobject]@{
+                    UserId              = 'user-004'
+                    UserPrincipalName   = 'healthy@example.com'
+                    IsUsable            = $true
+                }
+            )
+
+            $results = Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $assignments -RegistrationData $registrations
+            $results | Should -BeNullOrEmpty
+        }
+    }
+}
+
 Describe 'Invoke-MfaPlaybookResetDormantMethod' {
     InModuleScope MFACheckandSteer {
         BeforeEach {
@@ -772,6 +865,7 @@ Describe 'Incident scenarios' {
             $scenario = Get-Content -Path $ScenarioPath -Raw | ConvertFrom-Json
             $signIns = @($scenario.SignIns)
             $registrations = @($scenario.Registrations)
+            $roleAssignments = @($scenario.RoleAssignments)
 
             if ($scenario.PSObject.Properties.Name -contains 'ReferenceTime' -and $scenario.ReferenceTime) {
                 $reference = [datetime]$scenario.ReferenceTime
@@ -785,12 +879,14 @@ Describe 'Incident scenarios' {
 
             $dormant = if ($registrations) { Invoke-MfaDetectionDormantMethod -RegistrationData $registrations -ReferenceTime $reference } else { @() }
             $highRisk = if ($signIns) { Invoke-MfaDetectionHighRiskSignin -SignInData $signIns -ReferenceTime $reference } else { @() }
+            $privileged = if ($roleAssignments) { Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $roleAssignments -RegistrationData $registrations } else { @() }
             $scores = if ($signIns) { Invoke-MfaSuspiciousActivityScore -SignInData $signIns -RegistrationData $registrations -ReferenceTime $reference } else { @() }
             $scores = @($scores) | Where-Object { $_ }
 
             $allDetections = @()
             $allDetections += @($dormant)
             $allDetections += @($highRisk)
+            $allDetections += @($privileged)
             $allDetections = $allDetections | Where-Object { $_ }
             $expected = $scenario.Expectations
 

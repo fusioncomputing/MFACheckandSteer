@@ -10,6 +10,14 @@
       ""
     ]
   },
+  "MFA-DET-003": {
+    "PrivilegedRoleIds": [
+      "62e90394-69f5-4237-9190-012177145e10",
+      "e8611ab8-c189-46e8-94e1-60213ab1f814",
+      "194ae4cb-b126-40b2-bd5b-6091b380977d",
+      "b0f54661-2d74-4c50-afa3-1ec803f12efe"
+    ]
+  },
   "MFA-SCORE": {
     "ObservationHours": 24,
     "FailureThreshold": 3,

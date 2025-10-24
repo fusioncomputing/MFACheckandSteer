@@ -54,6 +54,7 @@ $scenario = Get-Content -Path $targetFile.FullName -Raw | ConvertFrom-Json
 
 $signIns = @($scenario.SignIns)
 $registrations = @($scenario.Registrations)
+$roleAssignments = @($scenario.RoleAssignments)
 
 $referenceTime = $null
 if ($scenario.PSObject.Properties.Name -contains 'ReferenceTime' -and $scenario.ReferenceTime) {
@@ -87,6 +88,11 @@ if ($signIns) {
     $highRiskDetections = Invoke-MfaDetectionHighRiskSignin -SignInData $signIns -ReferenceTime $referenceTime
 }
 
+$privilegedDetections = @()
+if ($roleAssignments) {
+    $privilegedDetections = Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $roleAssignments -RegistrationData $registrations
+}
+
 $scores = @()
 if ($signIns) {
     $scores = Invoke-MfaSuspiciousActivityScore -SignInData $signIns -RegistrationData $registrations -ReferenceTime $referenceTime
@@ -97,7 +103,7 @@ $payload = [ordered]@{
     Name         = $scenario.Name
     Description  = $scenario.Description
     ReferenceTime = $referenceTime.ToString('o')
-    Detections   = @($dormantDetections + $highRiskDetections)
+    Detections   = @($dormantDetections + $highRiskDetections + $privilegedDetections)
     Scores       = $scores
     Expectations = $scenario.Expectations
 }
@@ -133,4 +139,3 @@ if ($payload.Expectations) {
 }
 
 Write-Host "`nUse -AsJson for machine readable output or -List to view available scenarios." -ForegroundColor Cyan
-

@@ -35,6 +35,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `ConvertTo-MfaCanonicalSignIn` / `ConvertTo-MfaCanonicalRegistration` - Transform raw Graph objects into the schema described in `docs/phase-3-canonical-schema.md`.
 - `Invoke-MfaDetectionDormantMethod` - Flag default MFA methods that have not been updated recently.
 - `Invoke-MfaDetectionHighRiskSignin` - Surface successful sign-ins that carry Identity Protection risk signals.
+- `Invoke-MfaDetectionPrivilegedRoleNoMfa` - Identify privileged identities lacking compliant MFA coverage.
 - `Invoke-MfaSuspiciousActivityScore` - Correlate impossible travel, repeated failures, unusual devices, and recent factor changes into a per-user priority score.
 - `Get-MfaDetectionConfiguration` - Inspect the merged detection configuration (defaults plus overrides) used by Phase 4.5 tuning.
 - `Invoke-MfaPlaybookResetDormantMethod` - Apply playbook `MFA-PL-001` to revoke stale factors identified by `MFA-DET-001` with guardrails and audit-friendly output.

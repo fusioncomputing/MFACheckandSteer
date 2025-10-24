@@ -70,3 +70,4 @@ Each rule file will contain:
 4. Maintain synthetic incident scenarios alongside new detections to ensure regression coverage across evolving telemetry inputs.
 5. Track configuration changes and ensure overrides remain consistent with documented guardrails (Phase 4.5).
 6. Incorporate SLA metrics into ticketing and dashboards, escalating overdue detections per the controls catalog (Phase 4.6).
+7. Extend detection library with operational playbooks and additional specs (MFA-DET-003 now documented; MFA-DET-004/005 pending).

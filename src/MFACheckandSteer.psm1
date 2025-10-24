@@ -501,6 +501,14 @@ $script:MfaDetectionDefaultConfig = @{
         ObservationHours     = 24
         RiskDetailExclusions = @('none', 'unknownFutureValue', '')
     }
+    'MFA-DET-003' = @{
+        PrivilegedRoleIds = @(
+            '62e90394-69f5-4237-9190-012177145e10', # Global Administrator
+            'e8611ab8-c189-46e8-94e1-60213ab1f814', # Privileged Role Administrator
+            '194ae4cb-b126-40b2-bd5b-6091b380977d', # Security Administrator
+            'b0f54661-2d74-4c50-afa3-1ec803f12efe'  # Conditional Access Administrator
+        )
+    }
     'MFA-SCORE' = @{
         ObservationHours       = 24
         FailureThreshold       = 3
@@ -625,6 +633,13 @@ function Initialize-MfaDetectionConfiguration {
                                     }
                                     'RiskDetailExclusions' {
                                         Set-MfaConfigStringArray -Target $target -Name 'RiskDetailExclusions' -Value $paramValue
+                                    }
+                                }
+                            }
+                            'MFA-DET-003' {
+                                switch ($paramName) {
+                                    'PrivilegedRoleIds' {
+                                        Set-MfaConfigStringArray -Target $target -Name 'PrivilegedRoleIds' -Value $paramValue
                                     }
                                 }
                             }
@@ -1272,6 +1287,151 @@ function Invoke-MfaSuspiciousActivityScore {
     return $results | Sort-Object -Property Score -Descending
 }
 
+function Invoke-MfaDetectionPrivilegedRoleNoMfa {
+    [CmdletBinding()]
+    param(
+        [psobject[]] $RoleAssignments,
+        [psobject[]] $RegistrationData,
+        [string[]] $PrivilegedRoleIds,
+        [switch] $IncludeDisabledMethods
+    )
+
+    $effectiveRoleIds = $PrivilegedRoleIds
+    if (-not $PSBoundParameters.ContainsKey('PrivilegedRoleIds')) {
+        $config = Get-MfaDetectionConfiguration -DetectionId 'MFA-DET-003'
+        if ($config -and $config.PSObject.Properties['PrivilegedRoleIds']) {
+            $effectiveRoleIds = @($config.PrivilegedRoleIds)
+        }
+    }
+    if (-not $effectiveRoleIds) {
+        $effectiveRoleIds = @(
+            '62e90394-69f5-4237-9190-012177145e10',
+            'e8611ab8-c189-46e8-94e1-60213ab1f814',
+            '194ae4cb-b126-40b2-bd5b-6091b380977d',
+            'b0f54661-2d74-4c50-afa3-1ec803f12efe'
+        )
+    }
+
+    if (-not $RoleAssignments) {
+        Write-Warning 'Role assignments not provided. Supply -RoleAssignments or extend the function to retrieve assignments from Microsoft Graph.'
+        return @()
+    }
+
+    $privilegedAssignments = @($RoleAssignments | Where-Object {
+        $_ -and $_.RoleDefinitionId -and ($effectiveRoleIds -contains ([string]$_.RoleDefinitionId))
+    })
+
+    if (-not $privilegedAssignments) {
+        return @()
+    }
+
+    $registrationCache = @{}
+    if ($RegistrationData) {
+        foreach ($entry in ($RegistrationData | Where-Object { $_ })) {
+            $identifier = if ($entry.UserId) { [string]$entry.UserId } elseif ($entry.UserPrincipalName) { [string]$entry.UserPrincipalName } else { $null }
+            if (-not $identifier) { continue }
+            if (-not $registrationCache.ContainsKey($identifier)) {
+                $registrationCache[$identifier] = @()
+            }
+            $registrationCache[$identifier] += $entry
+        }
+    }
+
+    $results = @()
+    $groupedAssignments = $privilegedAssignments | Group-Object -Property {
+        if ($_.PrincipalId) { [string]$_.PrincipalId } else { [string]$_.UserId }
+    }
+
+    foreach ($group in $groupedAssignments) {
+        $principalId = $group.Name
+        if (-not $principalId) { continue }
+        $assignments = $group.Group
+        $roleNames = ($assignments | ForEach-Object {
+            if ($_.RoleDefinitionDisplayName) { [string]$_.RoleDefinitionDisplayName }
+            elseif ($_.RoleDefinitionName) { [string]$_.RoleDefinitionName }
+            else { [string]$_.RoleDefinitionId }
+        }) | Sort-Object -Unique
+
+        $upn = $null
+        $displayName = $null
+        foreach ($assignment in $assignments) {
+            if (-not $upn -and $assignment.PSObject.Properties['UserPrincipalName']) {
+                $upn = [string]$assignment.UserPrincipalName
+            }
+            if (-not $displayName -and $assignment.PSObject.Properties['UserDisplayName']) {
+                $displayName = [string]$assignment.UserDisplayName
+            }
+        }
+
+        $registrations = $null
+        if ($registrationCache.ContainsKey($principalId)) {
+            $registrations = $registrationCache[$principalId]
+        }
+        elseif ($upn -and $registrationCache.ContainsKey($upn)) {
+            $registrations = $registrationCache[$upn]
+        }
+        elseif (-not $RegistrationData -and (Test-MfaGraphPrerequisite)) {
+            try {
+                $fetched = $null
+                if ($upn) {
+                    $fetched = Get-MfaEntraRegistration -UserId $upn -Normalize
+                }
+                elseif ($principalId) {
+                    $fetched = Get-MfaEntraRegistration -UserId $principalId -Normalize
+                }
+                if ($fetched) {
+                    $registrationCache[$principalId] = $fetched
+                    $registrations = $fetched
+                }
+            }
+            catch {
+                Write-Verbose "Failed to retrieve registration data for ${principalId}: $($_.Exception.Message)"
+            }
+        }
+
+        $hasUsableMfa = $false
+        if ($registrations) {
+            foreach ($entry in $registrations) {
+                $usable = $entry.IsUsable
+                if ($IncludeDisabledMethods) {
+                    if ($usable -ne $false) {
+                        $hasUsableMfa = $true
+                        break
+                    }
+                }
+                else {
+                    if ($usable -eq $true -or $usable -eq $null) {
+                        $hasUsableMfa = $true
+                        break
+                    }
+                }
+            }
+        }
+
+        if (-not $hasUsableMfa) {
+            $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-DET-003' -Severity 'Critical'
+            $results += [pscustomobject]@{
+                DetectionId          = 'MFA-DET-003'
+                UserPrincipalName    = $upn
+                UserDisplayName      = $displayName
+                PrincipalId          = $principalId
+                PrivilegedRoles      = $roleNames
+                RegistrationCount    = if ($registrations) { $registrations.Count } else { 0 }
+                Severity             = 'Critical'
+                Source               = 'RoleAssignments'
+                FrameworkTags        = $metadata.FrameworkTags
+                NistFunctions        = $metadata.NistFunctions
+                ReportingTags        = $metadata.ReportingTags
+                ControlOwner         = $metadata.ControlOwner
+                ResponseSlaHours     = $metadata.ResponseSlaHours
+                ReviewCadenceDays    = $metadata.ReviewCadenceDays
+            }
+        }
+    }
+
+    return $results | Sort-Object -Property UserPrincipalName
+}
+
 function Invoke-MfaPlaybookResetDormantMethod {
     [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
     param(
@@ -1831,4 +1991,4 @@ function Invoke-MfaPlaybookTriageSuspiciousScore {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookTriageSuspiciousScore
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookTriageSuspiciousScore

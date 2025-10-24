@@ -14,6 +14,7 @@ Roadmap task **4.4** expands detection validation beyond unit tests by introduci
 | `INC-001` | MFA Fatigue Spray | Adversary performs password spray followed by repeated MFA push attempts against a privileged engineer. | `MFA-DET-002`, Suspicious score (`RepeatedFailures`, `UnusualDevice`) | High-risk success (if fatigue succeeds), medium/high aggregated score. |
 | `INC-002` | Dormant Factor Abuse | Stolen legacy phone factor abused after long dormancy; user signs in from new geography. | `MFA-DET-001`, Suspicious score (`ImpossibleTravel`) | Dormant method detection, medium aggregated score. |
 | `INC-003` | Emergency Factor Downgrade | Privileged admin resets MFA to SMS after phishing, then high-risk sign-in occurs. | `MFA-DET-002`, Suspicious score (`HighRiskFactorChange`) | High severity score, high-risk detection. |
+| `INC-004` | Privileged Admin Without MFA | Privileged account lacks any registered MFA method, prompting enforcement playbook. | `MFA-DET-003` | Critical detection for privileged role without MFA. |
 
 > Additional scenarios (e.g., service accounts, token theft) can be layered on as new detections ship.
 
@@ -26,8 +27,8 @@ Roadmap task **4.4** expands detection validation beyond unit tests by introduci
 ```powershell
 pwsh scripts/replay-scenarios.ps1 -ScenarioId INC-001 -Verbose
 ```
-1. Script loads scenario fixture (sign-ins, registrations).
-2. Executes `Invoke-MfaSuspiciousActivityScore` and detection cmdlets using in-memory data only.
+1. Script loads scenario fixture (sign-ins, registrations, role assignments when provided).
+2. Executes detection cmdlets (`Invoke-MfaDetectionDormantMethod`, `Invoke-MfaDetectionHighRiskSignin`, `Invoke-MfaDetectionPrivilegedRoleNoMfa`) and score helper using in-memory data only.
 3. Outputs findings, including framework/reporting tags.
 
 ## Testing Goals
@@ -39,4 +40,3 @@ pwsh scripts/replay-scenarios.ps1 -ScenarioId INC-001 -Verbose
 1. Populate the `data/scenarios/` fixtures and build the replay script.
 2. Add Pester coverage and integrate scenarios into CI pipeline.
 3. Expand scenario catalog when new detections or providers are added.
-
