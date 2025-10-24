@@ -18,6 +18,17 @@
       "b0f54661-2d74-4c50-afa3-1ec803f12efe"
     ]
   },
+  "MFA-DET-004": {
+    "ObservationHours": 24,
+    "FailureThreshold": 3,
+    "FailureWindowMinutes": 15
+  },
+  "MFA-DET-005": {
+    "ObservationHours": 24,
+    "TravelWindowMinutes": 120,
+    "RequireMfaRequirement": true,
+    "RequireSuccess": true
+  },
   "MFA-SCORE": {
     "ObservationHours": 24,
     "FailureThreshold": 3,

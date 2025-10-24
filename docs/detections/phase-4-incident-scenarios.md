@@ -15,6 +15,8 @@ Roadmap task **4.4** expands detection validation beyond unit tests by introduci
 | `INC-002` | Dormant Factor Abuse | Stolen legacy phone factor abused after long dormancy; user signs in from new geography. | `MFA-DET-001`, Suspicious score (`ImpossibleTravel`) | Dormant method detection, medium aggregated score. |
 | `INC-003` | Emergency Factor Downgrade | Privileged admin resets MFA to SMS after phishing, then high-risk sign-in occurs. | `MFA-DET-002`, Suspicious score (`HighRiskFactorChange`) | High severity score, high-risk detection. |
 | `INC-004` | Privileged Admin Without MFA | Privileged account lacks any registered MFA method, prompting enforcement playbook. | `MFA-DET-003` | Critical detection for privileged role without MFA. |
+| `INC-005` | MFA Failure Storm | Password spray triggers a burst of MFA denials, followed by monitoring sign-ins. | `MFA-DET-004`, Suspicious score (`RepeatedFailures`) | Medium-severity detection plus elevated score for repeated failures. |
+| `INC-006` | Impossible Travel Success | User signs in successfully from two continents within minutes using MFA. | `MFA-DET-005`, Suspicious score (`ImpossibleTravel`) | High-severity impossible travel detection and high score due to risk signals. |
 
 > Additional scenarios (e.g., service accounts, token theft) can be layered on as new detections ship.
 
@@ -26,10 +28,12 @@ Roadmap task **4.4** expands detection validation beyond unit tests by introduci
 ## Execution Flow
 ```powershell
 pwsh scripts/replay-scenarios.ps1 -ScenarioId INC-001 -Verbose
+# Include playbook previews
+pwsh scripts/replay-scenarios.ps1 -ScenarioId INC-001 -SimulatePlaybooks
 ```
 1. Script loads scenario fixture (sign-ins, registrations, role assignments when provided).
-2. Executes detection cmdlets (`Invoke-MfaDetectionDormantMethod`, `Invoke-MfaDetectionHighRiskSignin`, `Invoke-MfaDetectionPrivilegedRoleNoMfa`) and score helper using in-memory data only.
-3. Outputs findings, including framework/reporting tags.
+2. Executes detection cmdlets (`Invoke-MfaDetectionDormantMethod`, `Invoke-MfaDetectionHighRiskSignin`, `Invoke-MfaDetectionRepeatedMfaFailure`, `Invoke-MfaDetectionImpossibleTravelSuccess`, `Invoke-MfaDetectionPrivilegedRoleNoMfa`) and the score helper using in-memory data only.
+3. Outputs findings, including framework/reporting tags. With `-SimulatePlaybooks`, the replay also runs associated playbooks in `-WhatIf` mode to preview remediation steps.
 
 ## Testing Goals
 - Ensure detections are resilient to real-world-like data variations (timestamps, missing fields, mixed severities).
@@ -37,6 +41,6 @@ pwsh scripts/replay-scenarios.ps1 -ScenarioId INC-001 -Verbose
 - Enable SecOps to rehearse response playbooks (Phase 5) with deterministic data.
 
 ## Next Steps
-1. Populate the `data/scenarios/` fixtures and build the replay script.
+1. Continue enriching `data/scenarios/` with edge cases (e.g., resilient detections for service principals) and update the replay script as new detections arrive.
 2. Add Pester coverage and integrate scenarios into CI pipeline.
 3. Expand scenario catalog when new detections or providers are added.

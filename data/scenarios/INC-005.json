@@ -1,0 +1,125 @@
+{
+  "ScenarioId": "INC-005",
+  "Name": "MFA Failure Storm",
+  "ReferenceTime": "2025-11-05T15:30:00Z",
+  "Description": "Password spray triggers a burst of MFA denials for a finance analyst, prompting containment.",
+  "SignIns": [
+    {
+      "RecordType": "SignIn",
+      "Id": "inc5-signin-001",
+      "TenantId": "00000000-0000-0000-0000-000000000000",
+      "CreatedDateTime": "2025-11-05T15:05:00Z",
+      "UserId": "55555555-aaaa-4444-bbbb-111111111111",
+      "UserPrincipalName": "mfa.target@example.com",
+      "UserDisplayName": "Finance Analyst",
+      "AppDisplayName": "Contoso ERP",
+      "AppId": "d1ddf0e4-d672-4dae-b554-9d5bdfd93547",
+      "IpAddress": "198.51.100.25",
+      "LocationCity": "Toronto",
+      "LocationState": "Ontario",
+      "LocationCountryOrRegion": "CA",
+      "IsInteractive": true,
+      "AuthenticationRequirement": "mfa",
+      "AuthenticationRequirementPolicies": "Finance-MFA",
+      "AuthenticationMethods": "password;microsoftAuthenticatorPush",
+      "ConditionalAccessStatus": "failure",
+      "RiskDetail": "unfamiliarFeaturesOfThisDevice",
+      "RiskLevelAggregated": "medium",
+      "RiskState": "atRisk",
+      "CorrelationId": "inc5-corr-001",
+      "Result": "Failure",
+      "ResultErrorCode": 500121,
+      "ResultFailureReason": "User denied unexpected MFA prompt.",
+      "ResultAdditionalDetails": "Push notification rejected by user."
+    },
+    {
+      "RecordType": "SignIn",
+      "Id": "inc5-signin-002",
+      "TenantId": "00000000-0000-0000-0000-000000000000",
+      "CreatedDateTime": "2025-11-05T15:10:00Z",
+      "UserId": "55555555-aaaa-4444-bbbb-111111111111",
+      "UserPrincipalName": "mfa.target@example.com",
+      "UserDisplayName": "Finance Analyst",
+      "AppDisplayName": "Contoso ERP",
+      "AppId": "d1ddf0e4-d672-4dae-b554-9d5bdfd93547",
+      "IpAddress": "198.51.100.26",
+      "LocationCity": "Toronto",
+      "LocationState": "Ontario",
+      "LocationCountryOrRegion": "CA",
+      "IsInteractive": true,
+      "AuthenticationRequirement": "mfa",
+      "AuthenticationRequirementPolicies": "Finance-MFA",
+      "AuthenticationMethods": "password;microsoftAuthenticatorPush",
+      "ConditionalAccessStatus": "failure",
+      "RiskDetail": "unfamiliarFeaturesOfThisDevice",
+      "RiskLevelAggregated": "medium",
+      "RiskState": "atRisk",
+      "CorrelationId": "inc5-corr-002",
+      "Result": "Failure",
+      "ResultErrorCode": 500121,
+      "ResultFailureReason": "Timeout waiting for user confirmation.",
+      "ResultAdditionalDetails": "User ignored the MFA prompt."
+    },
+    {
+      "RecordType": "SignIn",
+      "Id": "inc5-signin-003",
+      "TenantId": "00000000-0000-0000-0000-000000000000",
+      "CreatedDateTime": "2025-11-05T15:12:00Z",
+      "UserId": "55555555-aaaa-4444-bbbb-111111111111",
+      "UserPrincipalName": "mfa.target@example.com",
+      "UserDisplayName": "Finance Analyst",
+      "AppDisplayName": "Contoso ERP",
+      "AppId": "d1ddf0e4-d672-4dae-b554-9d5bdfd93547",
+      "IpAddress": "198.51.100.27",
+      "LocationCity": "Toronto",
+      "LocationState": "Ontario",
+      "LocationCountryOrRegion": "CA",
+      "IsInteractive": true,
+      "AuthenticationRequirement": "mfa",
+      "AuthenticationRequirementPolicies": "Finance-MFA",
+      "AuthenticationMethods": "password;microsoftAuthenticatorPush",
+      "ConditionalAccessStatus": "failure",
+      "RiskDetail": "unfamiliarFeaturesOfThisDevice",
+      "RiskLevelAggregated": "medium",
+      "RiskState": "atRisk",
+      "CorrelationId": "inc5-corr-003",
+      "Result": "Failure",
+      "ResultErrorCode": 500121,
+      "ResultFailureReason": "User denied unexpected MFA prompt.",
+      "ResultAdditionalDetails": "Repeated denial indicates fatigue attack."
+    }
+  ],
+  "Registrations": [
+    {
+      "RecordType": "Registration",
+      "UserPrincipalName": "mfa.target@example.com",
+      "UserId": "55555555-aaaa-4444-bbbb-111111111111",
+      "MethodId": "authenticator-finance",
+      "MethodType": "microsoftAuthenticatorAuthenticationMethod",
+      "DisplayName": "Authenticator App",
+      "IsDefault": true,
+      "IsUsable": true,
+      "PhoneNumber": null,
+      "PhoneType": null,
+      "KeyDeviceId": "device-authenticator-01",
+      "CreatedDateTime": "2025-09-01T12:00:00Z",
+      "LastUpdatedDateTime": "2025-10-31T17:00:00Z",
+      "AdditionalData": null
+    }
+  ],
+  "Expectations": {
+    "Detections": [
+      {
+        "DetectionId": "MFA-DET-004",
+        "UserPrincipalName": "mfa.target@example.com"
+      }
+    ],
+    "Scores": [
+      {
+        "UserPrincipalName": "mfa.target@example.com",
+        "Severity": "Medium",
+        "MinScore": 35
+      }
+    ]
+  }
+}

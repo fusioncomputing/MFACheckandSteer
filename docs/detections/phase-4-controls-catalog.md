@@ -13,9 +13,12 @@ Roadmap task **4.6** formalizes the operational expectations tied to each detect
 |--------|-------------------|-------|--------------|----------------|----------|
 | `MFA-DET-001` Dormant MFA Method | Validate default factors remain current and revoke stale methods promptly. | SecOps IAM Team | 72 hours | Quarterly | `MFA-PL-001` Reset Dormant MFA Method |
 | `MFA-DET-002` High-Risk Sign-In Approved | Investigate risky sign-ins that succeeded with MFA and remediate compromised factors. | SecOps Incident Response | 4 hours | Monthly | `MFA-PL-002` Contain High-Risk Sign-In |
-| `MFA-SCORE` Suspicious Activity Score | Prioritize combined weak signals for analyst triage; escalate high/critical scores. | SecOps Triage Desk | 8 hours (Critical), 24 hours (High) | Bi-weekly | (Planned) MFA-PL-004 Suspicious Score Triage |
+| `MFA-DET-003` Privileged Role Without MFA | Restore compliant MFA coverage for privileged identities and validate CA enforcement. | SecOps IAM Team | 24 hours | Monthly | `MFA-PL-003` Enforce Privileged Role MFA |
+| `MFA-DET-004` Repeated MFA Failures | Contain potential spray/fatigue activity, reset credentials, and monitor follow-on attempts. | SecOps Incident Response | 8 hours | Monthly | `MFA-PL-005` Contain Repeated MFA Failure Storm |
+| `MFA-DET-005` Impossible Travel + MFA Success | Investigate potential token theft or consent hijack tied to impossible travel successes. | SecOps Threat Hunting | 6 hours | Monthly | `MFA-PL-006` Investigate Impossible Travel Success |
+| `MFA-SCORE` Suspicious Activity Score | Prioritize combined weak signals for analyst triage; escalate high/critical scores. | SecOps Triage Desk | 8 hours (Critical), 24 hours (High) | Bi-weekly | `MFA-PL-004` Suspicious Score Triage |
 
-> Update this table when new detections ship (MFA-DET-003+). Owners should confirm the values during the stakeholder cadence established in Phase 1.
+> Update this table as additional detections and playbooks ship. Owners should confirm the values during the stakeholder cadence established in Phase 1.
 
 ## SLA Enforcement Guidance
 1. **Tagging:** Each detection output includes `ResponseSlaHours` plus `ControlOwner` and `ReviewCadenceDays`. Automated workflows can route alerts by owner or SLA.

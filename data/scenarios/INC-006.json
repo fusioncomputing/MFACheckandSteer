@@ -1,0 +1,97 @@
+{
+  "ScenarioId": "INC-006",
+  "Name": "Impossible Travel Success",
+  "ReferenceTime": "2025-11-06T09:30:00Z",
+  "Description": "User signs in successfully from Canada and Germany within minutes, suggesting token theft or consent reuse.",
+  "SignIns": [
+    {
+      "RecordType": "SignIn",
+      "Id": "inc6-signin-001",
+      "TenantId": "00000000-0000-0000-0000-000000000000",
+      "CreatedDateTime": "2025-11-06T09:00:00Z",
+      "UserId": "77777777-bbbb-4444-cccc-222222222222",
+      "UserPrincipalName": "global.user@example.com",
+      "UserDisplayName": "Global Solutions Architect",
+      "AppDisplayName": "Azure Portal",
+      "AppId": "1950a258-227b-4e31-a9cf-717495945fc2",
+      "IpAddress": "203.0.113.45",
+      "LocationCity": "Toronto",
+      "LocationState": "Ontario",
+      "LocationCountryOrRegion": "CA",
+      "IsInteractive": true,
+      "AuthenticationRequirement": "mfa",
+      "AuthenticationRequirementPolicies": "Global-MFA",
+      "AuthenticationMethods": "password;microsoftAuthenticatorPush",
+      "ConditionalAccessStatus": "success",
+      "RiskDetail": "none",
+      "RiskLevelAggregated": "medium",
+      "RiskState": "dismissed",
+      "CorrelationId": "inc6-corr-001",
+      "Result": "Success",
+      "ResultErrorCode": 0,
+      "ResultFailureReason": null,
+      "ResultAdditionalDetails": "User approved MFA prompt."
+    },
+    {
+      "RecordType": "SignIn",
+      "Id": "inc6-signin-002",
+      "TenantId": "00000000-0000-0000-0000-000000000000",
+      "CreatedDateTime": "2025-11-06T09:18:00Z",
+      "UserId": "77777777-bbbb-4444-cccc-222222222222",
+      "UserPrincipalName": "global.user@example.com",
+      "UserDisplayName": "Global Solutions Architect",
+      "AppDisplayName": "Azure Portal",
+      "AppId": "1950a258-227b-4e31-a9cf-717495945fc2",
+      "IpAddress": "198.51.100.140",
+      "LocationCity": "Berlin",
+      "LocationState": "Berlin",
+      "LocationCountryOrRegion": "DE",
+      "IsInteractive": true,
+      "AuthenticationRequirement": "mfa",
+      "AuthenticationRequirementPolicies": "Global-MFA",
+      "AuthenticationMethods": "password;microsoftAuthenticatorPush",
+      "ConditionalAccessStatus": "success",
+      "RiskDetail": "none",
+      "RiskLevelAggregated": "medium",
+      "RiskState": "atRisk",
+      "CorrelationId": "inc6-corr-002",
+      "Result": "Success",
+      "ResultErrorCode": 0,
+      "ResultFailureReason": null,
+      "ResultAdditionalDetails": "MFA approved shortly after alert."
+    }
+  ],
+  "Registrations": [
+    {
+      "RecordType": "Registration",
+      "UserPrincipalName": "global.user@example.com",
+      "UserId": "77777777-bbbb-4444-cccc-222222222222",
+      "MethodId": "authenticator-global",
+      "MethodType": "microsoftAuthenticatorAuthenticationMethod",
+      "DisplayName": "Authenticator App",
+      "IsDefault": true,
+      "IsUsable": true,
+      "PhoneNumber": null,
+      "PhoneType": null,
+      "KeyDeviceId": "device-global-01",
+      "CreatedDateTime": "2025-08-15T14:00:00Z",
+      "LastUpdatedDateTime": "2025-10-20T09:00:00Z",
+      "AdditionalData": null
+    }
+  ],
+  "Expectations": {
+    "Detections": [
+      {
+        "DetectionId": "MFA-DET-005",
+        "UserPrincipalName": "global.user@example.com"
+      }
+    ],
+    "Scores": [
+      {
+        "UserPrincipalName": "global.user@example.com",
+        "Severity": "Medium",
+        "MinScore": 40
+      }
+    ]
+  }
+}

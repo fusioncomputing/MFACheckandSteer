@@ -64,10 +64,10 @@ Each rule file will contain:
 - Next steps outlined for implementing the first detection (likely MFA-DET-002 or MFA-DET-004).
 
 ## Next Actions
-1. Extend sample datasets to include positive/negative cases for each detection and integrate with automated regression tests. (Initial coverage added for Phase 4.2 scoring scenarios.)
-2. Publish rule specs for MFA-DET-003 through MFA-DET-005 following the established template.
-3. Wire detections and aggregated scores into reporting outputs (e.g., summary dashboards) and map to response playbooks in Phase 5. (Phase 4.3 mappings supply framework and reporting tags for automation.)
+1. Expand sample datasets and regression scenarios so each detection has positive and negative coverage (Phase 4.2 scoring fixtures plus new MFA-DET-004/005 narratives).
+2. Keep detection rule specs (`MFA-DET-001` through `MFA-DET-005`) current and draft new ones as roadmap items land.
+3. Wire detections and aggregated scores into reporting outputs (dashboards, ticket enrichments) and align with Phase 5 playbooks leveraging the framework/tag metadata.
 4. Maintain synthetic incident scenarios alongside new detections to ensure regression coverage across evolving telemetry inputs.
 5. Track configuration changes and ensure overrides remain consistent with documented guardrails (Phase 4.5).
 6. Incorporate SLA metrics into ticketing and dashboards, escalating overdue detections per the controls catalog (Phase 4.6).
-7. Extend detection library with operational playbooks and additional specs (MFA-DET-003 now documented; MFA-DET-004/005 pending).
+7. Keep detection-to-playbook pairings current while expanding automation coverage (e.g., future service-account detections and reporting integrations).

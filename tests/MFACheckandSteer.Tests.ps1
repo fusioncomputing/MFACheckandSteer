@@ -468,6 +468,165 @@ Describe 'Invoke-MfaDetectionHighRiskSignin' {
     It 'respects risk detail exclusions' -Skip {}
 }
 
+Describe 'Invoke-MfaDetectionRepeatedMfaFailure' {
+    It 'emits a detection when failures exceed the threshold within the window' {
+        $reference = Get-Date
+        $data = @(
+            [pscustomobject]@{
+                UserPrincipalName   = 'burst@example.com'
+                CreatedDateTime     = $reference.AddMinutes(-6).ToString('o')
+                Result              = 'Failure'
+                ResultFailureReason = 'User denied unexpected prompt.'
+                ResultErrorCode     = 500121
+                CorrelationId       = 'burst-001'
+            },
+            [pscustomobject]@{
+                UserPrincipalName   = 'burst@example.com'
+                CreatedDateTime     = $reference.AddMinutes(-4).ToString('o')
+                Result              = 'Failure'
+                ResultFailureReason = 'Timeout waiting for confirmation.'
+                ResultErrorCode     = 500121
+                CorrelationId       = 'burst-002'
+            },
+            [pscustomobject]@{
+                UserPrincipalName   = 'burst@example.com'
+                CreatedDateTime     = $reference.AddMinutes(-2).ToString('o')
+                Result              = 'Failure'
+                ResultFailureReason = 'User denied unexpected prompt.'
+                ResultErrorCode     = 500121
+                CorrelationId       = 'burst-003'
+            },
+            [pscustomobject]@{
+                UserPrincipalName   = 'other@example.com'
+                CreatedDateTime     = $reference.AddMinutes(-2).ToString('o')
+                Result              = 'Failure'
+                ResultFailureReason = 'User denied unexpected prompt.'
+                ResultErrorCode     = 500121
+                CorrelationId       = 'other-001'
+            }
+        )
+
+        $results = Invoke-MfaDetectionRepeatedMfaFailure -SignInData $data -ObservationHours 1 -FailureThreshold 3 -FailureWindowMinutes 10 -ReferenceTime $reference
+        $results | Should -HaveCount 1
+
+        $detection = $results[0]
+        $detection.DetectionId | Should -Be 'MFA-DET-004'
+        $detection.UserPrincipalName | Should -Be 'burst@example.com'
+        $detection.FailureCount | Should -BeGreaterOrEqual 3
+        $detection.FailureWindowMinutes | Should -Be 10
+        $detection.WindowEnd | Should -BeLessOrEqual $reference
+        $detection.ReportingTags | Should -Contain 'Risk-Medium'
+        $detection.FrameworkTags | Should -Contain 'ATTACK:T1110'
+        $detection.ControlOwner | Should -Be 'SecOps Incident Response'
+        $detection.CorrelationIds | Should -Contain 'burst-001'
+        $detection.CorrelationIds | Should -Contain 'burst-003'
+    }
+
+    It 'returns empty when failures stay below the threshold' {
+        $reference = Get-Date
+        $data = @(
+            [pscustomobject]@{
+                UserPrincipalName   = 'quiet@example.com'
+                CreatedDateTime     = $reference.AddMinutes(-20).ToString('o')
+                Result              = 'Failure'
+                ResultFailureReason = 'User denied unexpected prompt.'
+            },
+            [pscustomobject]@{
+                UserPrincipalName   = 'quiet@example.com'
+                CreatedDateTime     = $reference.AddMinutes(-5).ToString('o')
+                Result              = 'Failure'
+                ResultFailureReason = 'User denied unexpected prompt.'
+            }
+        )
+
+        $results = Invoke-MfaDetectionRepeatedMfaFailure -SignInData $data -ObservationHours 1 -FailureThreshold 3 -FailureWindowMinutes 10 -ReferenceTime $reference
+        $results | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Invoke-MfaDetectionImpossibleTravelSuccess' {
+    It 'flags impossible travel successes by default' {
+        $reference = Get-Date
+        $data = @(
+            [pscustomobject]@{
+                UserPrincipalName         = 'traveler@example.com'
+                CreatedDateTime           = $reference.AddMinutes(-40).ToString('o')
+                LocationCountryOrRegion   = 'CA'
+                LocationCity              = 'Toronto'
+                IpAddress                 = '203.0.113.10'
+                Result                    = 'Success'
+                AuthenticationRequirement = 'mfa'
+                AuthenticationMethods     = 'password;microsoftAuthenticatorPush'
+            },
+            [pscustomobject]@{
+                UserPrincipalName         = 'traveler@example.com'
+                CreatedDateTime           = $reference.AddMinutes(-15).ToString('o')
+                LocationCountryOrRegion   = 'DE'
+                LocationCity              = 'Berlin'
+                IpAddress                 = '198.51.100.50'
+                Result                    = 'Success'
+                AuthenticationRequirement = 'mfa'
+                AuthenticationMethods     = 'password;microsoftAuthenticatorPush'
+            },
+            [pscustomobject]@{
+                UserPrincipalName         = 'traveler@example.com'
+                CreatedDateTime           = $reference.AddMinutes(-5).ToString('o')
+                LocationCountryOrRegion   = 'DE'
+                LocationCity              = 'Berlin'
+                IpAddress                 = '198.51.100.51'
+                Result                    = 'Success'
+                AuthenticationRequirement = 'mfa'
+                AuthenticationMethods     = 'password;microsoftAuthenticatorPush'
+            }
+        )
+
+        $results = Invoke-MfaDetectionImpossibleTravelSuccess -SignInData $data -ObservationHours 1 -TravelWindowMinutes 60 -ReferenceTime $reference
+        $results | Should -HaveCount 1
+
+        $detection = $results[0]
+        $detection.DetectionId | Should -Be 'MFA-DET-005'
+        $detection.UserPrincipalName | Should -Be 'traveler@example.com'
+        $detection.PreviousCountry | Should -Be 'CA'
+        $detection.CurrentCountry | Should -Be 'DE'
+        $detection.TimeDeltaMinutes | Should -BeLessOrEqual 60
+        $detection.ReportingTags | Should -Contain 'Risk-High'
+        $detection.FrameworkTags | Should -Contain 'ATTACK:T1078'
+        $detection.ControlOwner | Should -Be 'SecOps Threat Hunting'
+    }
+
+    It 'respects RequireMfaRequirement when disabled' {
+        $reference = Get-Date
+        $data = @(
+            [pscustomobject]@{
+                UserPrincipalName         = 'api@example.com'
+                CreatedDateTime           = $reference.AddMinutes(-30).ToString('o')
+                LocationCountryOrRegion   = 'US'
+                LocationCity              = 'Seattle'
+                IpAddress                 = '203.0.113.90'
+                Result                    = 'Success'
+                AuthenticationRequirement = $null
+                AuthenticationMethods     = 'password'
+            },
+            [pscustomobject]@{
+                UserPrincipalName         = 'api@example.com'
+                CreatedDateTime           = $reference.AddMinutes(-5).ToString('o')
+                LocationCountryOrRegion   = 'GB'
+                LocationCity              = 'London'
+                IpAddress                 = '198.51.100.90'
+                Result                    = 'Success'
+                AuthenticationRequirement = $null
+                AuthenticationMethods     = 'password'
+            }
+        )
+
+        $defaultResults = Invoke-MfaDetectionImpossibleTravelSuccess -SignInData $data -ObservationHours 1 -TravelWindowMinutes 45 -ReferenceTime $reference
+        $defaultResults | Should -BeNullOrEmpty
+
+        $overriddenResults = Invoke-MfaDetectionImpossibleTravelSuccess -SignInData $data -ObservationHours 1 -TravelWindowMinutes 45 -RequireMfaRequirement:$false -ReferenceTime $reference
+        $overriddenResults | Should -HaveCount 1
+    }
+}
+
 Describe 'Invoke-MfaSuspiciousActivityScore' {
     It 'produces scores for suspicious activity combinations' {
         $reference = [datetime]'2025-10-22T16:00:00Z'
@@ -803,6 +962,118 @@ Describe 'Invoke-MfaPlaybookContainHighRiskSignin' {
     }
 }
 
+Describe 'Invoke-MfaPlaybookContainRepeatedFailure' {
+    InModuleScope MFACheckandSteer {
+        BeforeEach {
+            Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    TenantId = 'contoso-tenant'
+                    Account  = [pscustomobject]@{ Username = 'admin@contoso.com' }
+                }
+            }
+        }
+
+        It 'returns containment guidance for repeated failures' {
+            $detection = [pscustomobject]@{
+                DetectionId          = 'MFA-DET-004'
+                UserPrincipalName    = 'burst@example.com'
+                FailureCount         = 5
+                WindowStart          = (Get-Date).AddMinutes(-12)
+                WindowEnd            = (Get-Date)
+                FailureWindowMinutes = 15
+                FailureReasons       = 'User denied unexpected prompt; Timeout waiting for confirmation.'
+                FailureErrorCodes    = @(500121)
+                CorrelationIds       = @('burst-001','burst-002')
+                Severity             = 'Medium'
+            }
+
+            $result = Invoke-MfaPlaybookContainRepeatedFailure -Detection $detection -WhatIf -Verbose:$false
+            $result.PlaybookId | Should -Be 'MFA-PL-005'
+            $result.DetectionId | Should -Be 'MFA-DET-004'
+            $result.UserPrincipalName | Should -Be 'burst@example.com'
+            $result.FailureCount | Should -Be 5
+            $result.ExecutedSteps | Should -Contain 'Temporarily block sign-in'
+            $result.IsSimulation | Should -BeTrue
+            $result.GraphValidated | Should -BeTrue
+            $result.ControlOwner | Should -Be 'SecOps Incident Response'
+            $result.ResponseSlaHours | Should -Be 8
+        }
+
+        It 'respects skip switches' {
+            Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith { $null }
+            $detection = [pscustomobject]@{
+                DetectionId       = 'MFA-DET-004'
+                UserPrincipalName = 'skip@example.com'
+                FailureCount      = 3
+            }
+
+            $result = Invoke-MfaPlaybookContainRepeatedFailure -Detection $detection -SkipGraphValidation -NoUserNotification -NoTicketUpdate -NoUserBlock -WhatIf -Verbose:$false
+            $result.GraphValidated | Should -BeFalse
+            $result.NotificationsSent | Should -BeFalse
+            $result.TicketUpdated | Should -BeFalse
+            $result.UserBlocked | Should -BeFalse
+            $result.SkippedSteps | Should -Contain 'Contact user'
+            $result.SkippedSteps | Should -Contain 'Temporarily block sign-in'
+        }
+    }
+}
+
+Describe 'Invoke-MfaPlaybookInvestigateImpossibleTravel' {
+    InModuleScope MFACheckandSteer {
+        BeforeEach {
+            Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    TenantId = 'contoso-tenant'
+                    Account  = [pscustomobject]@{ Username = 'admin@contoso.com' }
+                }
+            }
+        }
+
+        It 'guides investigation for impossible travel detections' {
+            $detection = [pscustomobject]@{
+                DetectionId        = 'MFA-DET-005'
+                UserPrincipalName  = 'traveler@example.com'
+                PreviousCountry    = 'CA'
+                CurrentCountry     = 'DE'
+                TimeDeltaMinutes   = 20
+                PreviousIpAddress  = '203.0.113.45'
+                CurrentIpAddress   = '198.51.100.90'
+                AuthenticationRequirement = 'mfa'
+                AuthenticationMethods     = 'password;microsoftAuthenticatorPush'
+                Severity           = 'High'
+            }
+
+            $result = Invoke-MfaPlaybookInvestigateImpossibleTravel -Detection $detection -WhatIf -Verbose:$false
+            $result.PlaybookId | Should -Be 'MFA-PL-006'
+            $result.DetectionId | Should -Be 'MFA-DET-005'
+            $result.UserPrincipalName | Should -Be 'traveler@example.com'
+            $result.PreviousCountry | Should -Be 'CA'
+            $result.CurrentCountry | Should -Be 'DE'
+            $result.ExecutedSteps | Should -Contain 'Validate with user'
+            $result.GraphValidated | Should -BeTrue
+            $result.SessionsRevoked | Should -BeTrue
+            $result.ControlOwner | Should -Be 'SecOps Threat Hunting'
+            $result.ResponseSlaHours | Should -Be 6
+        }
+
+        It 'supports skip switches' {
+            Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith { $null }
+            $detection = [pscustomobject]@{
+                DetectionId        = 'MFA-DET-005'
+                UserPrincipalName  = 'skip@example.com'
+            }
+
+            $result = Invoke-MfaPlaybookInvestigateImpossibleTravel -Detection $detection -SkipGraphValidation -NoUserNotification -NoTicketUpdate -NoSessionRevocation -WhatIf -Verbose:$false
+            $result.GraphValidated | Should -BeFalse
+            $result.SessionsRevoked | Should -BeFalse
+            $result.NotificationsSent | Should -BeFalse
+            $result.TicketUpdated | Should -BeFalse
+            $result.SkippedSteps | Should -Contain 'Validate with user'
+            $result.SkippedSteps | Should -Contain 'Revoke sessions'
+        }
+    }
+}
+
 Describe 'Invoke-MfaPlaybookTriageSuspiciousScore' {
     InModuleScope MFACheckandSteer {
         It 'recommends containment for high severity scores' {
@@ -848,6 +1119,15 @@ Describe 'Incident scenarios' {
         $scenarioFiles = Get-ChildItem -Path $scenarioRoot -Filter '*.json'
     }
 
+    BeforeAll {
+        Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith {
+            [pscustomobject]@{
+                TenantId = 'contoso-tenant'
+                Account  = [pscustomobject]@{ Username = 'analyst@contoso.com' }
+            }
+        }
+    }
+
     if ($scenarioFiles) {
         $testCases = $scenarioFiles | ForEach-Object {
             @{
@@ -879,6 +1159,8 @@ Describe 'Incident scenarios' {
 
             $dormant = if ($registrations) { Invoke-MfaDetectionDormantMethod -RegistrationData $registrations -ReferenceTime $reference } else { @() }
             $highRisk = if ($signIns) { Invoke-MfaDetectionHighRiskSignin -SignInData $signIns -ReferenceTime $reference } else { @() }
+            $repeated = if ($signIns) { Invoke-MfaDetectionRepeatedMfaFailure -SignInData $signIns -ReferenceTime $reference } else { @() }
+            $impossible = if ($signIns) { Invoke-MfaDetectionImpossibleTravelSuccess -SignInData $signIns -ReferenceTime $reference } else { @() }
             $privileged = if ($roleAssignments) { Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $roleAssignments -RegistrationData $registrations } else { @() }
             $scores = if ($signIns) { Invoke-MfaSuspiciousActivityScore -SignInData $signIns -RegistrationData $registrations -ReferenceTime $reference } else { @() }
             $scores = @($scores) | Where-Object { $_ }
@@ -886,6 +1168,8 @@ Describe 'Incident scenarios' {
             $allDetections = @()
             $allDetections += @($dormant)
             $allDetections += @($highRisk)
+            $allDetections += @($repeated)
+            $allDetections += @($impossible)
             $allDetections += @($privileged)
             $allDetections = $allDetections | Where-Object { $_ }
             $expected = $scenario.Expectations
@@ -916,6 +1200,47 @@ Describe 'Incident scenarios' {
                     $scoreMatch[0].ReportingTags | Should -Contain ("Risk-{0}" -f $scoreMatch[0].Severity)
                     $scoreMatch[0].ControlOwner | Should -Not -BeNullOrEmpty
                     $scoreMatch[0].ResponseSlaHours | Should -BeGreaterThan 0
+                }
+            }
+
+            $playbookPlans = @()
+            foreach ($detection in $allDetections) {
+                if (-not $detection -or -not $detection.DetectionId) { continue }
+
+                $commonArgs = @{
+                    Detection           = $detection
+                    SkipGraphValidation = $true
+                    WhatIf              = $true
+                    Verbose             = $false
+                }
+
+                $plan = switch ($detection.DetectionId) {
+                    'MFA-DET-001' { Invoke-MfaPlaybookResetDormantMethod @commonArgs }
+                    'MFA-DET-002' { Invoke-MfaPlaybookContainHighRiskSignin @commonArgs }
+                    'MFA-DET-003' { Invoke-MfaPlaybookEnforcePrivilegedRoleMfa @commonArgs }
+                    'MFA-DET-004' { Invoke-MfaPlaybookContainRepeatedFailure @commonArgs }
+                    'MFA-DET-005' { Invoke-MfaPlaybookInvestigateImpossibleTravel @commonArgs }
+                    default { $null }
+                }
+
+                if ($plan) {
+                    $playbookPlans += @($plan)
+                }
+            }
+
+            foreach ($score in $scores) {
+                if (-not $score) { continue }
+                $triage = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -WhatIf -Verbose:$false
+                if ($triage) {
+                    $playbookPlans += @($triage)
+                }
+            }
+
+            foreach ($plan in $playbookPlans) {
+                $plan.PlaybookId | Should -Not -BeNullOrEmpty
+                if ($plan.PSObject.Properties.Name -contains 'DetectionId' -and $plan.DetectionId) {
+                    $plan.ControlOwner | Should -Not -BeNullOrEmpty
+                    $plan.ResponseSlaHours | Should -BeGreaterThan 0
                 }
             }
         }

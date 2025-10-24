@@ -6,7 +6,8 @@ param(
     [Parameter(ParameterSetName = 'List')]
     [switch] $List,
 
-    [switch] $AsJson
+    [switch] $AsJson,
+    [switch] $SimulatePlaybooks
 )
 
 $scriptRoot = Split-Path -Parent $PSCommandPath
@@ -88,6 +89,16 @@ if ($signIns) {
     $highRiskDetections = Invoke-MfaDetectionHighRiskSignin -SignInData $signIns -ReferenceTime $referenceTime
 }
 
+$repeatedFailureDetections = @()
+if ($signIns) {
+    $repeatedFailureDetections = Invoke-MfaDetectionRepeatedMfaFailure -SignInData $signIns -ReferenceTime $referenceTime
+}
+
+$impossibleTravelDetections = @()
+if ($signIns) {
+    $impossibleTravelDetections = Invoke-MfaDetectionImpossibleTravelSuccess -SignInData $signIns -ReferenceTime $referenceTime
+}
+
 $privilegedDetections = @()
 if ($roleAssignments) {
     $privilegedDetections = Invoke-MfaDetectionPrivilegedRoleNoMfa -RoleAssignments $roleAssignments -RegistrationData $registrations
@@ -103,10 +114,56 @@ $payload = [ordered]@{
     Name         = $scenario.Name
     Description  = $scenario.Description
     ReferenceTime = $referenceTime.ToString('o')
-    Detections   = @($dormantDetections + $highRiskDetections + $privilegedDetections)
+    Detections   = @($dormantDetections + $highRiskDetections + $repeatedFailureDetections + $impossibleTravelDetections + $privilegedDetections)
     Scores       = $scores
     Expectations = $scenario.Expectations
 }
+
+$playbookPlans = @()
+if ($SimulatePlaybooks) {
+    foreach ($detection in $payload.Detections) {
+        if (-not $detection -or -not $detection.DetectionId) { continue }
+
+        $commonArgs = @{
+            Detection           = $detection
+            SkipGraphValidation = $true
+            WhatIf              = $true
+            Verbose             = $false
+        }
+
+        switch ($detection.DetectionId) {
+            'MFA-DET-001' {
+                $plan = Invoke-MfaPlaybookResetDormantMethod @commonArgs
+            }
+            'MFA-DET-002' {
+                $plan = Invoke-MfaPlaybookContainHighRiskSignin @commonArgs
+            }
+            'MFA-DET-003' {
+                $plan = Invoke-MfaPlaybookEnforcePrivilegedRoleMfa @commonArgs
+            }
+            'MFA-DET-004' {
+                $plan = Invoke-MfaPlaybookContainRepeatedFailure @commonArgs
+            }
+            'MFA-DET-005' {
+                $plan = Invoke-MfaPlaybookInvestigateImpossibleTravel @commonArgs
+            }
+        }
+
+        if ($plan) {
+            $playbookPlans += @($plan)
+        }
+    }
+
+    foreach ($score in $scores) {
+        if (-not $score) { continue }
+        $plan = Invoke-MfaPlaybookTriageSuspiciousScore -Score $score -WhatIf -Verbose:$false
+        if ($plan) {
+            $playbookPlans += @($plan)
+        }
+    }
+}
+
+$payload.Playbooks = $playbookPlans
 
 if ($AsJson) {
     $payload | ConvertTo-Json -Depth 10
@@ -139,3 +196,13 @@ if ($payload.Expectations) {
 }
 
 Write-Host "`nUse -AsJson for machine readable output or -List to view available scenarios." -ForegroundColor Cyan
+
+if ($SimulatePlaybooks) {
+    Write-Host "`nPlaybook Plans:" -ForegroundColor Green
+    if ($playbookPlans) {
+        $playbookPlans | Select-Object PlaybookId, DetectionId, UserPrincipalName, ControlOwner, ResponseSlaHours | Format-Table -AutoSize
+    }
+    else {
+        Write-Host "  (no playbooks executed)" -ForegroundColor DarkGray
+    }
+}

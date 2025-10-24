@@ -35,16 +35,23 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `ConvertTo-MfaCanonicalSignIn` / `ConvertTo-MfaCanonicalRegistration` - Transform raw Graph objects into the schema described in `docs/phase-3-canonical-schema.md`.
 - `Invoke-MfaDetectionDormantMethod` - Flag default MFA methods that have not been updated recently.
 - `Invoke-MfaDetectionHighRiskSignin` - Surface successful sign-ins that carry Identity Protection risk signals.
+- `Invoke-MfaDetectionRepeatedMfaFailure` - Detect bursts of MFA failures within a tunable window.
+- `Invoke-MfaDetectionImpossibleTravelSuccess` - Flag rapid geography changes that still succeed with MFA.
 - `Invoke-MfaDetectionPrivilegedRoleNoMfa` - Identify privileged identities lacking compliant MFA coverage.
 - `Invoke-MfaSuspiciousActivityScore` - Correlate impossible travel, repeated failures, unusual devices, and recent factor changes into a per-user priority score.
 - `Get-MfaDetectionConfiguration` - Inspect the merged detection configuration (defaults plus overrides) used by Phase 4.5 tuning.
 - `Invoke-MfaPlaybookResetDormantMethod` - Apply playbook `MFA-PL-001` to revoke stale factors identified by `MFA-DET-001` with guardrails and audit-friendly output.
+- `Invoke-MfaPlaybookEnforcePrivilegedRoleMfa` - Apply playbook `MFA-PL-003` to restore compliant MFA coverage for privileged identities.
 - `Invoke-MfaPlaybookContainHighRiskSignin` - Apply playbook `MFA-PL-002` to contain successful risky sign-ins identified by `MFA-DET-002`.
+- `Invoke-MfaPlaybookContainRepeatedFailure` - Apply playbook `MFA-PL-005` to contain MFA failure storms uncovered by `MFA-DET-004`.
+- `Invoke-MfaPlaybookInvestigateImpossibleTravel` - Apply playbook `MFA-PL-006` when `MFA-DET-005` flags suspicious impossible travel successes.
+- `Invoke-MfaPlaybookTriageSuspiciousScore` - Apply playbook `MFA-PL-004` to triage aggregated suspicious activity scores.
 - All detection and scoring outputs include `FrameworkTags`, `NistFunctions`, and `ReportingTags` to satisfy Phase 4.3 governance requirements (see `docs/detections/phase-4-framework-mapping.md`).
 
 ## Sample Data
 - Run `pwsh scripts/replay-samples.ps1` to view the synthetic MFA datasets included under `data/samples/`.
 - Use `pwsh scripts/replay-scenarios.ps1 -List` to view curated incident scenarios, then run a scenario (e.g., `-ScenarioId INC-001`) to exercise detections end-to-end.
+- Add `-SimulatePlaybooks` when replaying scenarios to execute playbooks in `-WhatIf` mode and preview the remediation checklist associated with each signal.
 - Use `-Dataset SignIn|Registration` and `-AsJson` to export specific samples for automated tests or demos.
 - Refer to `docs/phase-3-sample-data.md` for detailed guidance.
 
@@ -53,10 +60,10 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - Run `Get-MfaDetectionConfiguration` (optionally with `-Refresh`) to confirm effective settings; overrides apply automatically unless cmdlet parameters are provided at call time.
 - Set the `MfaDetectionConfigurationPath` environment variable to point at an alternate JSON file when testing changes or running scenario-specific baselines.
 
-- Review `docs/detections/playbooks/phase-5-response-strategy.md` for the Phase 5 remediation playbook approach and `docs/detections/playbooks/MFA-PL-001-reset-dormant-method.md` for the first scripted runbook.
+- Review `docs/detections/playbooks/phase-5-response-strategy.md` for the Phase 5 remediation playbook approach and the individual playbook specs under `docs/detections/playbooks/` (MFA-PL-001 through MFA-PL-006).
 
 ## Next Steps
-- Finalize remaining detection specs and implementations (MFA-DET-003 through MFA-DET-005).
-- Integrate playbook outputs (MFA-PL-001 through MFA-PL-004) with ticketing/notification workflows.
+- Integrate the new detection outputs (MFA-DET-004 and MFA-DET-005) into dashboards, alerting, and analyst workflows.
+- Integrate playbook outputs (MFA-PL-001 through MFA-PL-006) with ticketing/notification workflows.
 - Feed suspicious activity scores into dashboards and ticketing workflows (Phase 5 and 6).
 - Tighten CI gates with linting and packaging when functional modules are in place.

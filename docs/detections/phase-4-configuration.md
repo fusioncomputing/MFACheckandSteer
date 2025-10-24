@@ -19,8 +19,27 @@ Roadmap task **4.5** introduces structured configuration so SecOps teams can tun
     "ObservationHours": 24,
     "RiskDetailExclusions": [
       "none",
-      "unknownFutureValue"
+      "unknownFutureValue",
+      ""
     ]
+  },
+  "MFA-DET-003": {
+    "PrivilegedRoleIds": [
+      "62e90394-69f5-4237-9190-012177145e10",
+      "e8611ab8-c189-46e8-94e1-60213ab1f814"
+      // Additional IDs omitted for brevity
+    ]
+  },
+  "MFA-DET-004": {
+    "ObservationHours": 24,
+    "FailureThreshold": 3,
+    "FailureWindowMinutes": 15
+  },
+  "MFA-DET-005": {
+    "ObservationHours": 24,
+    "TravelWindowMinutes": 120,
+    "RequireMfaRequirement": true,
+    "RequireSuccess": true
   },
   "MFA-SCORE": {
     "ObservationHours": 24,
@@ -55,6 +74,6 @@ Roadmap task **4.5** introduces structured configuration so SecOps teams can tun
 - Encourage SecOps to review configuration changes during cadence meetings established in Phase 1.
 
 ## Next Steps
-1. Extend configuration coverage as new detections (MFA-DET-003+) are implemented.
+1. Extend configuration coverage as new detections land (e.g., service-account coverage in later phases) and document recommended ranges alongside defaults.
 2. Consider per-tenant configuration files or environment-specific overlays when multi-tenant support is added.
 3. Surface configuration values in future reporting dashboards (Phase 6) to improve transparency.

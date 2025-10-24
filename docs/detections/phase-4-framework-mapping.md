@@ -13,9 +13,12 @@ Roadmap task **4.3** ensures every detection produced by MFA Check & Steer align
 |--------------|--------------|----------|----------------|-------|
 | MFA-DET-001 Dormant MFA Method | `T1078` (Valid Accounts) | `PR.AC-1`, `PR.AC-6` | `Configuration`, `MFA`, `DormantMethod`, `Risk-Medium` | Dormant factors expand the attack surface for valid account abuse. |
 | MFA-DET-002 High-Risk Sign-In Approved | `T1110.003` (Password Spraying), `T1621` (Multi-Factor Authentication Interception) | `DE.AE-2`, `DE.CM-7` | `Authentication`, `HighRiskSignin`, `Risk-High` | Identity Protection sign-ins with MFA success signal MFA fatigue/factor compromise. |
-| MFA-Score Suspicious Activity | `T1110`, `T1078`, `T1621` (as applicable) | `DE.AE-2`, `DE.AE-3`, `DE.CM-1` | `Aggregated`, `SuspiciousScore`, `Risk-{Severity}` | Aggregated scoring surfaces combined weak signals; severity suffix mirrors computed tier. |
+| MFA-DET-003 Privileged Role Without MFA | `T1078` (Valid Accounts), `T1098` (Account Manipulation) | `PR.AC-4`, `PR.IP-1` | `Configuration`, `PrivilegedRole`, `Risk-Critical` | Privileged identities without compliant MFA create direct takeover paths. |
+| MFA-DET-004 Repeated MFA Failures | `T1110` (Brute Force), `T1621` (MFA Interception) | `DE.AE-2`, `DE.CM-7` | `Authentication`, `RepeatedFailure`, `Risk-Medium` | Burst of MFA failures suggests password spray, fatigue, or automation testing boundaries. |
+| MFA-DET-005 Impossible Travel + MFA Success | `T1078` (Valid Accounts), `T1110` (Credential Access) | `DE.AE-2`, `DE.CM-7` | `Authentication`, `ImpossibleTravel`, `Risk-High` | Success from distant geographies with MFA implies token theft or MFA fatigue bypass. |
+| MFA-SCORE Suspicious Activity | `T1110`, `T1078`, `T1621` (as applicable) | `DE.AE-2`, `DE.AE-3`, `DE.CM-1` | `Aggregated`, `SuspiciousScore`, `Risk-{Severity}` | Aggregated scoring surfaces combined weak signals; severity suffix mirrors computed tier. |
 
-> Future detections (MFA-DET-003+) must extend this table as they are authored. Internal control IDs can reference your organization's GRC library if available.
+> Future detections beyond MFA-DET-005 must extend this table as they are authored. Internal control IDs can reference your organization's GRC library if available.
 
 ## Reporting Tag Conventions
 - Tags are emitted as ordered string arrays in detection/scoring output.
@@ -33,4 +36,3 @@ Roadmap task **4.3** ensures every detection produced by MFA Check & Steer align
 - Extend mappings to include CIS Controls, ISO 27001, or other frameworks used by stakeholders.
 - Publish the catalog as JSON for integration with reporting pipelines in Phase 6.
 - Incorporate confidence levels and remediation SLAs alongside tags for richer automation hooks.
-
