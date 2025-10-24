@@ -492,12 +492,354 @@ function ConvertTo-MfaDateTime {
     return $null
 }
 
+$script:MfaDetectionConfigCache = $null
+$script:MfaDetectionDefaultConfig = @{
+    'MFA-DET-001' = @{
+        DormantDays = 90
+    }
+    'MFA-DET-002' = @{
+        ObservationHours     = 24
+        RiskDetailExclusions = @('none', 'unknownFutureValue', '')
+    }
+    'MFA-SCORE' = @{
+        ObservationHours       = 24
+        FailureThreshold       = 3
+        FailureWindowMinutes   = 30
+        TravelWindowMinutes    = 120
+        RecentRegistrationDays = 7
+        WeakMethodTypes        = @(
+            'phoneAuthenticationMethod',
+            'temporaryAccessPassAuthenticationMethod',
+            'smsAuthenticationMethod',
+            'voiceAuthenticationMethod'
+        )
+    }
+}
+
+function Get-MfaDetectionConfigPath {
+    $customPath = [Environment]::GetEnvironmentVariable('MfaDetectionConfigurationPath', 'Process')
+    if (-not $customPath) {
+        $moduleRoot = Split-Path -Parent $PSScriptRoot
+        $customPath = Join-Path -Path $moduleRoot -ChildPath 'config/detections.json'
+    }
+
+    return $customPath
+}
+
+function Set-MfaConfigInt {
+    param(
+        [hashtable] $Target,
+        [string] $Name,
+        [object] $Value,
+        [int] $Min = 1,
+        [int] $Max = [int]::MaxValue
+    )
+
+    if ($null -eq $Value -or $Value -eq '') {
+        return
+    }
+
+    try {
+        $converted = [int]$Value
+        if ($converted -lt $Min -or $converted -gt $Max) {
+            Write-Warning "Configuration value '$Name' ($converted) is outside the allowed range $Min-$Max. Skipping override."
+            return
+        }
+
+        $Target[$Name] = $converted
+    }
+    catch {
+        Write-Warning "Configuration value '$Name' could not be converted to an integer. Skipping override."
+    }
+}
+
+function Set-MfaConfigStringArray {
+    param(
+        [hashtable] $Target,
+        [string] $Name,
+        [object] $Value
+    )
+
+    if ($null -eq $Value) {
+        return
+    }
+
+    $items = @()
+
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        foreach ($entry in $Value) {
+            if ($null -ne $entry -and $entry -ne '') {
+                $items += [string]$entry
+            }
+        }
+    }
+    else {
+        $items += [string]$Value
+    }
+
+    if ($items.Count -gt 0) {
+        $Target[$Name] = $items
+    }
+}
+
+function Initialize-MfaDetectionConfiguration {
+    $defaults = $script:MfaDetectionDefaultConfig
+    $effective = @{}
+    foreach ($key in $defaults.Keys) {
+        $copy = @{}
+        foreach ($param in $defaults[$key].Keys) {
+            $copy[$param] = $defaults[$key][$param]
+        }
+        $effective[$key] = $copy
+    }
+
+    $path = Get-MfaDetectionConfigPath
+    if (Test-Path $path) {
+        try {
+            $raw = Get-Content -Path $path -Raw
+            if ($raw) {
+                $overrides = ConvertFrom-Json -InputObject $raw -AsHashtable
+                foreach ($entry in $overrides.GetEnumerator()) {
+                    $key = [string]$entry.Key
+                    $value = $entry.Value
+                    if (-not $effective.ContainsKey($key)) {
+                        $effective[$key] = @{}
+                    }
+
+                    $target = $effective[$key]
+
+                    foreach ($paramEntry in $value.GetEnumerator()) {
+                        $paramName = [string]$paramEntry.Key
+                        $paramValue = $paramEntry.Value
+
+                        switch ($key) {
+                            'MFA-DET-001' {
+                                if ($paramName -eq 'DormantDays') {
+                                    Set-MfaConfigInt -Target $target -Name 'DormantDays' -Value $paramValue -Min 1 -Max 365
+                                }
+                            }
+                            'MFA-DET-002' {
+                                switch ($paramName) {
+                                    'ObservationHours' {
+                                        Set-MfaConfigInt -Target $target -Name 'ObservationHours' -Value $paramValue -Min 1 -Max 168
+                                    }
+                                    'RiskDetailExclusions' {
+                                        Set-MfaConfigStringArray -Target $target -Name 'RiskDetailExclusions' -Value $paramValue
+                                    }
+                                }
+                            }
+                            'MFA-SCORE' {
+                                switch ($paramName) {
+                                    'ObservationHours' {
+                                        Set-MfaConfigInt -Target $target -Name 'ObservationHours' -Value $paramValue -Min 1 -Max 168
+                                    }
+                                    'FailureThreshold' {
+                                        Set-MfaConfigInt -Target $target -Name 'FailureThreshold' -Value $paramValue -Min 1 -Max 10
+                                    }
+                                    'FailureWindowMinutes' {
+                                        Set-MfaConfigInt -Target $target -Name 'FailureWindowMinutes' -Value $paramValue -Min 1 -Max 720
+                                    }
+                                    'TravelWindowMinutes' {
+                                        Set-MfaConfigInt -Target $target -Name 'TravelWindowMinutes' -Value $paramValue -Min 1 -Max 720
+                                    }
+                                    'RecentRegistrationDays' {
+                                        Set-MfaConfigInt -Target $target -Name 'RecentRegistrationDays' -Value $paramValue -Min 1 -Max 30
+                                    }
+                                    'WeakMethodTypes' {
+                                        Set-MfaConfigStringArray -Target $target -Name 'WeakMethodTypes' -Value $paramValue
+                                    }
+                                }
+                            }
+                            default {
+                                $target[$paramName] = $paramValue
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+            Write-Warning "Failed to parse detection configuration file at '$path'. Using defaults. Error: $($_.Exception.Message)"
+        }
+    }
+
+    $script:MfaDetectionConfigCache = @{}
+    foreach ($entry in $effective.GetEnumerator()) {
+        $script:MfaDetectionConfigCache[$entry.Key] = [pscustomobject]$entry.Value
+    }
+    $script:MfaDetectionConfigCache['__Metadata'] = [pscustomobject]@{
+        Path = $path
+    }
+}
+
+function Get-MfaDetectionConfiguration {
+    [CmdletBinding()]
+    param(
+        [string] $DetectionId,
+        [switch] $Refresh
+    )
+
+    if ($Refresh -or -not $script:MfaDetectionConfigCache) {
+        Initialize-MfaDetectionConfiguration
+    }
+
+    if ($DetectionId) {
+        if ($script:MfaDetectionConfigCache.ContainsKey($DetectionId)) {
+            return $script:MfaDetectionConfigCache[$DetectionId]
+        }
+
+        return $null
+    }
+
+    return $script:MfaDetectionConfigCache
+}
+
+$script:MfaDetectionMetadata = $null
+
+function Initialize-MfaDetectionMetadata {
+    if ($script:MfaDetectionMetadata) {
+        return
+    }
+
+    $script:MfaDetectionMetadata = @{
+        'MFA-DET-001' = @{
+            FrameworkTags = @('ATTACK:T1078')
+            NistFunctions = @('PR.AC-1', 'PR.AC-6')
+            ReportingTags = @('Configuration', 'MFA', 'DormantMethod', 'Risk-{Severity}')
+            ControlOwner = 'SecOps IAM Team'
+            ResponseSlaHours = 72
+            ReviewCadenceDays = 90
+        }
+        'MFA-DET-003' = @{
+            FrameworkTags = @('ATTACK:T1078', 'ATTACK:T1098')
+            NistFunctions = @('PR.AC-4', 'PR.IP-1')
+            ReportingTags = @('Configuration', 'PrivilegedRole', 'Risk-{Severity}')
+            ControlOwner = 'SecOps IAM Team'
+            ResponseSlaHours = 24
+            ReviewCadenceDays = 30
+        }
+        'MFA-DET-002' = @{
+            FrameworkTags = @('ATTACK:T1110.003', 'ATTACK:T1621')
+            NistFunctions = @('DE.AE-2', 'DE.CM-7')
+            ReportingTags = @('Authentication', 'HighRiskSignin', 'Risk-{Severity}')
+            ControlOwner = 'SecOps Incident Response'
+            ResponseSlaHours = 4
+            ReviewCadenceDays = 30
+        }
+        'MFA-SCORE' = @{
+            FrameworkTags = @('ATTACK:T1110', 'ATTACK:T1078', 'ATTACK:T1621')
+            NistFunctions = @('DE.AE-2', 'DE.AE-3', 'DE.CM-1')
+            ReportingTags = @('Aggregated', 'SuspiciousScore', 'Risk-{Severity}')
+            ControlOwner = 'SecOps Triage Desk'
+            ResponseSlaHours = @{
+                Critical = 8
+                High     = 24
+                Default  = 24
+            }
+            ReviewCadenceDays = 14
+        }
+    }
+}
+
+function Resolve-MfaDetectionMetadata {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string] $DetectionId,
+        [string] $Severity
+    )
+
+    Initialize-MfaDetectionMetadata
+    $entry = $script:MfaDetectionMetadata[$DetectionId]
+    if (-not $entry) {
+        return $null
+    }
+
+    function Get-EntryValue {
+        param($Source, [string] $Name)
+
+        if ($Source -is [System.Collections.IDictionary]) {
+            if ($Source.Contains($Name)) {
+                return $Source[$Name]
+            }
+            return $null
+        }
+
+        $prop = $Source.PSObject.Properties[$Name]
+        if ($prop) {
+            return $prop.Value
+        }
+
+        return $null
+    }
+
+    $resolvedTags = @()
+    foreach ($tag in (@(Get-EntryValue -Source $entry -Name 'ReportingTags') | Where-Object { $_ })) {
+        if ($Severity -and $tag -like '*{Severity}*') {
+            $resolvedTags += ($tag -replace '\{Severity\}', $Severity)
+        }
+        else {
+            $resolvedTags += $tag
+        }
+    }
+
+    $slaValue = $null
+    $rawSla = Get-EntryValue -Source $entry -Name 'ResponseSlaHours'
+    if ($null -ne $rawSla) {
+        if ($rawSla -is [hashtable]) {
+            if ($Severity -and $rawSla.ContainsKey($Severity)) {
+                $slaValue = [int]$rawSla[$Severity]
+            }
+            elseif ($rawSla.ContainsKey('Default')) {
+                $slaValue = [int]$rawSla['Default']
+            }
+            elseif ($rawSla.Keys.Count -gt 0) {
+                $firstKey = ($rawSla.Keys | Select-Object -First 1)
+                $slaValue = [int]$rawSla[$firstKey]
+            }
+        }
+        elseif ($rawSla -ne $null -and $rawSla -ne '') {
+            $slaValue = [int]$rawSla
+        }
+    }
+
+    $controlOwner = Get-EntryValue -Source $entry -Name 'ControlOwner'
+    if ($controlOwner) {
+        $controlOwner = [string]$controlOwner
+    }
+
+    $reviewCadence = Get-EntryValue -Source $entry -Name 'ReviewCadenceDays'
+    if ($reviewCadence) {
+        $reviewCadence = [int]$reviewCadence
+    }
+
+    $frameworkTags = Get-EntryValue -Source $entry -Name 'FrameworkTags'
+    $nistFunctions = Get-EntryValue -Source $entry -Name 'NistFunctions'
+
+    return [pscustomobject]@{
+        FrameworkTags = @($frameworkTags | Where-Object { $_ })
+        NistFunctions = @($nistFunctions | Where-Object { $_ })
+        ReportingTags = $resolvedTags
+        ControlOwner  = $controlOwner
+        ResponseSlaHours = $slaValue
+        ReviewCadenceDays = $reviewCadence
+    }
+}
+
 function Invoke-MfaDetectionDormantMethod {
     param(
         [psobject[]] $RegistrationData,
         [int] $DormantDays = 90,
         [datetime] $ReferenceTime = (Get-Date)
     )
+
+    $effectiveDormantDays = $DormantDays
+    if (-not $PSBoundParameters.ContainsKey('DormantDays')) {
+        $config = Get-MfaDetectionConfiguration -DetectionId 'MFA-DET-001'
+        if ($config -and $config.PSObject.Properties.Name -contains 'DormantDays' -and $config.DormantDays) {
+            $effectiveDormantDays = [math]::Max(1, [int]$config.DormantDays)
+        }
+    }
 
     if (-not $RegistrationData) {
         $RegistrationData = Get-MfaEntraRegistration -Normalize
@@ -507,7 +849,7 @@ function Invoke-MfaDetectionDormantMethod {
         return @()
     }
 
-    $cutoff = $ReferenceTime.AddDays(-[math]::Abs($DormantDays))
+    $cutoff = $ReferenceTime.AddDays(-[math]::Abs($effectiveDormantDays))
 
     $detections = foreach ($record in $RegistrationData) {
         if (-not $record) { continue }
@@ -524,6 +866,7 @@ function Invoke-MfaDetectionDormantMethod {
         }
 
         if ($isDormant) {
+            $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-DET-001' -Severity 'Medium'
             [pscustomobject]@{
                 DetectionId          = 'MFA-DET-001'
                 UserPrincipalName    = $record.UserPrincipalName
@@ -531,6 +874,12 @@ function Invoke-MfaDetectionDormantMethod {
                 LastUpdatedDateTime  = $lastUpdated
                 Severity             = 'Medium'
                 Source               = 'Get-MfaEntraRegistration'
+                FrameworkTags        = $metadata.FrameworkTags
+                NistFunctions        = $metadata.NistFunctions
+                ReportingTags        = $metadata.ReportingTags
+                ControlOwner         = $metadata.ControlOwner
+                ResponseSlaHours     = $metadata.ResponseSlaHours
+                ReviewCadenceDays    = $metadata.ReviewCadenceDays
             }
         }
     }
@@ -542,11 +891,31 @@ function Invoke-MfaDetectionHighRiskSignin {
     param(
         [psobject[]] $SignInData,
         [int] $ObservationHours = 24,
-        [datetime] $ReferenceTime = (Get-Date)
+        [datetime] $ReferenceTime = (Get-Date),
+        [string[]] $RiskDetailExclusions
     )
 
+    $effectiveObservationHours = $ObservationHours
+    $effectiveRiskDetailExclusions = if ($RiskDetailExclusions) { @($RiskDetailExclusions) } else { $null }
+
+    if (-not $PSBoundParameters.ContainsKey('ObservationHours') -or -not $PSBoundParameters.ContainsKey('RiskDetailExclusions')) {
+        $config = Get-MfaDetectionConfiguration -DetectionId 'MFA-DET-002'
+        if ($config) {
+            if (-not $PSBoundParameters.ContainsKey('ObservationHours') -and $config.PSObject.Properties.Name -contains 'ObservationHours' -and $config.ObservationHours) {
+                $effectiveObservationHours = [math]::Max(1, [int]$config.ObservationHours)
+            }
+            if (-not $PSBoundParameters.ContainsKey('RiskDetailExclusions') -and $config.PSObject.Properties.Name -contains 'RiskDetailExclusions' -and $config.RiskDetailExclusions) {
+                $effectiveRiskDetailExclusions = @($config.RiskDetailExclusions)
+            }
+        }
+    }
+
+    if (-not $effectiveRiskDetailExclusions) {
+        $effectiveRiskDetailExclusions = @('none', 'unknownFutureValue', '')
+    }
+
     if (-not $SignInData) {
-        $start = $ReferenceTime.AddHours(-[math]::Abs($ObservationHours))
+        $start = $ReferenceTime.AddHours(-[math]::Abs($effectiveObservationHours))
         $SignInData = Get-MfaEntraSignIn -Normalize -StartTime $start -EndTime $ReferenceTime
     }
 
@@ -554,8 +923,7 @@ function Invoke-MfaDetectionHighRiskSignin {
         return @()
     }
 
-    $windowStart = $ReferenceTime.AddHours(-[math]::Abs($ObservationHours))
-    $riskDetailsExclude = @('none', 'unknownFutureValue', '')
+    $windowStart = $ReferenceTime.AddHours(-[math]::Abs($effectiveObservationHours))
 
     $detections = foreach ($record in $SignInData) {
         if (-not $record) { continue }
@@ -577,11 +945,12 @@ function Invoke-MfaDetectionHighRiskSignin {
         if ($riskState -eq 'atRisk') {
             $isRisky = $true
         }
-        elseif ($riskDetail -and ($RiskDetailsExclude -notcontains $riskDetail)) {
+        elseif ($riskDetail -and ($effectiveRiskDetailExclusions -notcontains $riskDetail)) {
             $isRisky = $true
         }
 
         if ($isRisky) {
+            $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-DET-002' -Severity 'High'
             [pscustomobject]@{
                 DetectionId          = 'MFA-DET-002'
                 UserPrincipalName    = $record.UserPrincipalName
@@ -592,6 +961,12 @@ function Invoke-MfaDetectionHighRiskSignin {
                 Severity             = 'High'
                 CorrelationId        = $record.CorrelationId
                 Source               = 'Get-MfaEntraSignIn'
+                FrameworkTags        = $metadata.FrameworkTags
+                NistFunctions        = $metadata.NistFunctions
+                ReportingTags        = $metadata.ReportingTags
+                ControlOwner         = $metadata.ControlOwner
+                ResponseSlaHours     = $metadata.ResponseSlaHours
+                ReviewCadenceDays    = $metadata.ReviewCadenceDays
             }
         }
     }
@@ -599,4 +974,861 @@ function Invoke-MfaDetectionHighRiskSignin {
     return $detections
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin
+function Invoke-MfaSuspiciousActivityScore {
+    [CmdletBinding()]
+    param(
+        [psobject[]] $SignInData,
+        [psobject[]] $RegistrationData,
+        [int] $ObservationHours = 24,
+        [datetime] $ReferenceTime = (Get-Date),
+        [int] $FailureThreshold = 3,
+        [int] $FailureWindowMinutes = 30,
+        [int] $TravelWindowMinutes = 120,
+        [int] $RecentRegistrationDays = 7,
+        [string[]] $WeakMethodTypes = @(
+            'phoneAuthenticationMethod',
+            'temporaryAccessPassAuthenticationMethod',
+            'smsAuthenticationMethod',
+            'voiceAuthenticationMethod'
+        )
+    )
+
+    $effectiveObservationHours = $ObservationHours
+    $effectiveFailureThreshold = $FailureThreshold
+    $effectiveFailureWindowMinutes = $FailureWindowMinutes
+    $effectiveTravelWindowMinutes = $TravelWindowMinutes
+    $effectiveRecentRegistrationDays = $RecentRegistrationDays
+    $effectiveWeakMethodTypes = @($WeakMethodTypes)
+
+    $useConfig = @(
+        -not $PSBoundParameters.ContainsKey('ObservationHours'),
+        -not $PSBoundParameters.ContainsKey('FailureThreshold'),
+        -not $PSBoundParameters.ContainsKey('FailureWindowMinutes'),
+        -not $PSBoundParameters.ContainsKey('TravelWindowMinutes'),
+        -not $PSBoundParameters.ContainsKey('RecentRegistrationDays'),
+        -not $PSBoundParameters.ContainsKey('WeakMethodTypes')
+    ) -contains $true
+
+    if ($useConfig) {
+        $config = Get-MfaDetectionConfiguration -DetectionId 'MFA-SCORE'
+        if ($config) {
+            if (-not $PSBoundParameters.ContainsKey('ObservationHours') -and $config.PSObject.Properties.Name -contains 'ObservationHours' -and $config.ObservationHours) {
+                $effectiveObservationHours = [math]::Max(1, [int]$config.ObservationHours)
+            }
+            if (-not $PSBoundParameters.ContainsKey('FailureThreshold') -and $config.PSObject.Properties.Name -contains 'FailureThreshold' -and $config.FailureThreshold) {
+                $effectiveFailureThreshold = [math]::Max(1, [int]$config.FailureThreshold)
+            }
+            if (-not $PSBoundParameters.ContainsKey('FailureWindowMinutes') -and $config.PSObject.Properties.Name -contains 'FailureWindowMinutes' -and $config.FailureWindowMinutes) {
+                $effectiveFailureWindowMinutes = [math]::Max(1, [int]$config.FailureWindowMinutes)
+            }
+            if (-not $PSBoundParameters.ContainsKey('TravelWindowMinutes') -and $config.PSObject.Properties.Name -contains 'TravelWindowMinutes' -and $config.TravelWindowMinutes) {
+                $effectiveTravelWindowMinutes = [math]::Max(1, [int]$config.TravelWindowMinutes)
+            }
+            if (-not $PSBoundParameters.ContainsKey('RecentRegistrationDays') -and $config.PSObject.Properties.Name -contains 'RecentRegistrationDays' -and $config.RecentRegistrationDays) {
+                $effectiveRecentRegistrationDays = [math]::Max(1, [int]$config.RecentRegistrationDays)
+            }
+            if (-not $PSBoundParameters.ContainsKey('WeakMethodTypes') -and $config.PSObject.Properties.Name -contains 'WeakMethodTypes' -and $config.WeakMethodTypes) {
+                $effectiveWeakMethodTypes = @($config.WeakMethodTypes)
+            }
+        }
+    }
+
+    $weights = @{
+        ImpossibleTravel      = 40
+        RepeatedFailures      = 20
+        UnusualDevice         = 15
+        HighRiskFactorChange  = 25
+    }
+
+    $observationHours = [math]::Abs($effectiveObservationHours)
+    if ($observationHours -eq 0) {
+        $observationHours = 24
+    }
+
+    $windowEnd = $ReferenceTime
+    $windowStart = $ReferenceTime.AddHours(-$observationHours)
+
+    if (-not $SignInData) {
+        Write-Verbose "Fetching normalized sign-in data for the past $observationHours hour(s)."
+        $SignInData = Get-MfaEntraSignIn -Normalize -StartTime $windowStart -EndTime $windowEnd
+    }
+
+    if (-not $SignInData) {
+        Write-Verbose 'No sign-in data available for scoring.'
+        return @()
+    }
+
+    $normalizedSignIns = foreach ($record in $SignInData) {
+        if (-not $record) { continue }
+        $user = $record.UserPrincipalName
+        if (-not $user) { continue }
+
+        $created = ConvertTo-MfaDateTime -Value $record.CreatedDateTime
+        if (-not $created) { continue }
+        if ($created -lt $windowStart -or $created -gt $windowEnd) { continue }
+
+        [pscustomobject]@{
+            Raw                      = $record
+            UserPrincipalName        = $user
+            CreatedDateTime          = $created
+            LocationCountryOrRegion  = $record.LocationCountryOrRegion
+            LocationCity             = $record.LocationCity
+            Result                   = $record.Result
+            RiskDetail               = $record.RiskDetail
+            RiskState                = $record.RiskState
+            ResultFailureReason      = $record.ResultFailureReason
+            ResultAdditionalDetails  = $record.ResultAdditionalDetails
+        }
+    }
+
+    if (-not $normalizedSignIns) {
+        Write-Verbose 'No sign-in records fell within the observation window.'
+        return @()
+    }
+
+    if (-not $RegistrationData) {
+        if (Test-MfaGraphPrerequisite) {
+            $uniqueUsers = $normalizedSignIns.UserPrincipalName | Sort-Object -Unique
+            $collected = @()
+            foreach ($user in $uniqueUsers) {
+                try {
+                    Write-Verbose "Fetching registration data for $user."
+                    $records = Get-MfaEntraRegistration -UserId $user -Normalize
+                    if ($records) {
+                        $collected += $records
+                    }
+                }
+                catch {
+                    Write-Verbose "Failed to load registration data for ${user}: $($_.Exception.Message)"
+                }
+            }
+            if ($collected) {
+                $RegistrationData = $collected
+            }
+        }
+        else {
+            Write-Verbose 'Microsoft.Graph module not detected; skipping registration lookup.'
+        }
+    }
+
+    $registrationsByUser = @{}
+    foreach ($registration in ($RegistrationData | Where-Object { $_ })) {
+        $user = $registration.UserPrincipalName
+        if (-not $user) { continue }
+        if (-not $registrationsByUser.ContainsKey($user)) {
+            $registrationsByUser[$user] = @()
+        }
+        $registrationsByUser[$user] += $registration
+    }
+
+    $failureWindow = [TimeSpan]::FromMinutes([math]::Abs($effectiveFailureWindowMinutes))
+    if ($failureWindow.TotalMinutes -eq 0) {
+        $failureWindow = [TimeSpan]::FromMinutes(1)
+    }
+
+    $travelWindow = [TimeSpan]::FromMinutes([math]::Abs($effectiveTravelWindowMinutes))
+    if ($travelWindow.TotalMinutes -eq 0) {
+        $travelWindow = [TimeSpan]::FromMinutes(120)
+    }
+
+    $recentRegistrationCutoff = $windowEnd.AddDays(-[math]::Abs($effectiveRecentRegistrationDays))
+    $weakMethodSet = [System.Collections.Generic.HashSet[string]]::new([string[]]$effectiveWeakMethodTypes)
+    $unusualRiskDetails = @('unfamiliarFeaturesOfThisDevice', 'newDevice', 'registerSecurityInformation')
+
+    $results = @()
+    $signInsByUser = $normalizedSignIns | Group-Object -Property UserPrincipalName
+    foreach ($group in $signInsByUser) {
+        $user = $group.Name
+        $records = $group.Group | Sort-Object -Property CreatedDateTime
+        $indicators = @()
+
+        # Impossible travel detection
+        for ($i = 1; $i -lt $records.Count; $i++) {
+            $previous = $records[$i - 1]
+            $current = $records[$i]
+            $prevCountry = $previous.LocationCountryOrRegion
+            $currCountry = $current.LocationCountryOrRegion
+            if (-not $prevCountry -or -not $currCountry) { continue }
+            if ($prevCountry -eq $currCountry) { continue }
+
+            $delta = $current.CreatedDateTime - $previous.CreatedDateTime
+            if ([math]::Abs($delta.TotalMinutes) -le $travelWindow.TotalMinutes) {
+                $detail = "Country changed from $prevCountry to $currCountry within {0} minute(s)." -f [math]::Round([math]::Abs($delta.TotalMinutes), 0)
+                $indicators += [pscustomobject]@{
+                    Type      = 'ImpossibleTravel'
+                    Weight    = $weights.ImpossibleTravel
+                    Details   = $detail
+                    Timestamp = $current.CreatedDateTime
+                }
+                break
+            }
+        }
+
+        # Repeated failures detection
+        $failureRecords = $records | Where-Object { $_.Result -eq 'Failure' }
+        $failureCount = @($failureRecords).Count
+        if ($failureCount -ge $effectiveFailureThreshold) {
+            $queue = [System.Collections.Generic.Queue[datetime]]::new()
+            $trigger = $null
+            foreach ($failure in ($failureRecords | Sort-Object -Property CreatedDateTime)) {
+                while ($queue.Count -gt 0 -and ($failure.CreatedDateTime - $queue.Peek()) -gt $failureWindow) {
+                    [void]$queue.Dequeue()
+                }
+                $queue.Enqueue($failure.CreatedDateTime)
+                if (-not $trigger -and $queue.Count -ge $effectiveFailureThreshold) {
+                    $trigger = @{
+                        Start = $queue.Peek()
+                        End   = $failure.CreatedDateTime
+                        Count = $queue.Count
+                    }
+                }
+            }
+
+            if ($trigger) {
+                $detail = "{0} failures between {1:o} and {2:o}." -f $trigger.Count, $trigger.Start, $trigger.End
+                $indicators += [pscustomobject]@{
+                    Type      = 'RepeatedFailures'
+                    Weight    = $weights.RepeatedFailures
+                    Details   = $detail
+                    Timestamp = $trigger.End
+                }
+            }
+        }
+
+        # Unusual device detection
+        $unusualRecord = $records | Where-Object {
+            ($_.RiskDetail -and ($unusualRiskDetails -contains $_.RiskDetail)) -or
+            ($_.ResultFailureReason -and ($_.ResultFailureReason -match 'device')) -or
+            ($_.ResultAdditionalDetails -and ($_.ResultAdditionalDetails -match 'device'))
+        } | Select-Object -First 1
+
+        if ($unusualRecord) {
+            $detail = "Risk detail '{0}' observed with result '{1}'.".Trim() -f $unusualRecord.RiskDetail, $unusualRecord.Result
+            $indicators += [pscustomobject]@{
+                Type      = 'UnusualDevice'
+                Weight    = $weights.UnusualDevice
+                Details   = $detail
+                Timestamp = $unusualRecord.CreatedDateTime
+            }
+        }
+
+        # High-risk factor change detection
+        if ($registrationsByUser.ContainsKey($user)) {
+            $userRegistrations = $registrationsByUser[$user]
+            $recentWeakMethod = $userRegistrations | Where-Object {
+                $_.IsDefault -eq $true -and
+                $_.MethodType -and
+                $weakMethodSet.Contains([string]$_.MethodType) -and
+                (ConvertTo-MfaDateTime -Value $_.LastUpdatedDateTime) -ge $recentRegistrationCutoff
+            } | Select-Object -First 1
+
+            if ($recentWeakMethod) {
+                $lastUpdated = ConvertTo-MfaDateTime -Value $recentWeakMethod.LastUpdatedDateTime
+                $detail = "Default method set to {0} on {1:o}." -f $recentWeakMethod.MethodType, $lastUpdated
+                $indicators += [pscustomobject]@{
+                    Type      = 'HighRiskFactorChange'
+                    Weight    = $weights.HighRiskFactorChange
+                    Details   = $detail
+                    Timestamp = $lastUpdated
+                }
+            }
+        }
+
+        if (-not $indicators) { continue }
+
+        $score = ($indicators | Measure-Object -Property Weight -Sum).Sum
+        $severity = 'Informational'
+        if ($score -ge 75) {
+            $severity = 'Critical'
+        }
+        elseif ($score -ge 50) {
+            $severity = 'High'
+        }
+        elseif ($score -ge 25) {
+            $severity = 'Medium'
+        }
+
+        $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-SCORE' -Severity $severity
+
+        $results += [pscustomobject]@{
+            UserPrincipalName = $user
+            Score             = $score
+            Severity          = $severity
+            Indicators        = $indicators
+            WindowStart       = $windowStart
+            WindowEnd         = $windowEnd
+            SignInCount       = $records.Count
+            FailureCount      = $failureCount
+            SignalId          = 'MFA-SCORE'
+            FrameworkTags     = $metadata.FrameworkTags
+            NistFunctions     = $metadata.NistFunctions
+            ReportingTags     = $metadata.ReportingTags
+            ControlOwner      = $metadata.ControlOwner
+            ResponseSlaHours  = $metadata.ResponseSlaHours
+            ReviewCadenceDays = $metadata.ReviewCadenceDays
+        }
+    }
+
+    return $results | Sort-Object -Property Score -Descending
+}
+
+function Invoke-MfaPlaybookResetDormantMethod {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Detection,
+
+        [switch] $SkipGraphValidation,
+        [switch] $NoUserNotification
+    )
+
+    begin {
+        $results = @()
+    }
+
+    process {
+        if (-not $Detection) {
+            throw "Detection input is required. Pipe the object emitted by Invoke-MfaDetectionDormantMethod or specify -Detection."
+        }
+
+        $detectionId = if ($Detection.PSObject.Properties['DetectionId']) { [string]$Detection.DetectionId } else { $null }
+        if ($detectionId -and $detectionId -ne 'MFA-DET-001') {
+            Write-Warning ("Playbook MFA-PL-001 targets detection 'MFA-DET-001'. Input '{0}' may not be compatible." -f $detectionId)
+        }
+
+        $user = if ($Detection.PSObject.Properties['UserPrincipalName']) { [string]$Detection.UserPrincipalName } else { $null }
+        if (-not $user) {
+            throw "Detection input does not include 'UserPrincipalName'. Cannot proceed."
+        }
+
+        $methodType = if ($Detection.PSObject.Properties['MethodType']) { [string]$Detection.MethodType } else { $null }
+        $severity = if ($Detection.PSObject.Properties['Severity'] -and $Detection.Severity) { [string]$Detection.Severity } else { 'Medium' }
+        $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-DET-001' -Severity $severity
+
+        if (-not $SkipGraphValidation) {
+            $context = Get-MfaGraphContext
+            if (-not $context) {
+                throw "Microsoft Graph context not found. Run Connect-MfaGraphDeviceCode or use -SkipGraphValidation to bypass this check."
+            }
+        }
+
+        $steps = @(
+            @{ Step = 'Notify user'; Description = "Notify $user and relevant SecOps queues about the upcoming MFA reset."; Key = 'NotifyUser' },
+            @{ Step = 'Disable stale method'; Description = "Disable or remove the dormant method ($methodType) via Microsoft Graph."; Key = 'DisableMethod' },
+            @{ Step = 'Trigger re-registration'; Description = "Send MFA re-registration instructions and schedule follow-up."; Key = 'TriggerReregistration' },
+            @{ Step = 'Update ticket'; Description = "Update the incident/ticket with remediation evidence and SLA status."; Key = 'UpdateTicket' }
+        )
+
+        $executedSteps = @()
+        $isSimulation = ($WhatIfPreference -eq $true)
+        $stepNumber = 0
+
+        foreach ($step in $steps) {
+            $stepNumber++
+            $action = "{0}/{1}: {2}" -f $stepNumber, $steps.Count, $step.Description
+            $shouldProcess = $PSCmdlet.ShouldProcess($user, $step.Step)
+            if ($shouldProcess -or $isSimulation) {
+                if ($isSimulation) {
+                    Write-Verbose ("[SIMULATION] {0}" -f $action)
+                }
+                elseif ($shouldProcess) {
+                    Write-Host ("Step {0}" -f $action) -ForegroundColor Cyan
+                    switch ($step.Key) {
+                        'NotifyUser' {
+                            if (-not $NoUserNotification) {
+                                Write-Verbose ("Prepare notification template for {0} referencing detection {1}." -f $user, $detectionId)
+                            }
+                            else {
+                                Write-Verbose 'User notification suppressed by -NoUserNotification.'
+                            }
+                        }
+                        'DisableMethod' {
+                            Write-Verbose 'Call Microsoft Graph (e.g., Remove-MgUserAuthenticationPhoneMethod) to revoke the stale method.'
+                        }
+                        'TriggerReregistration' {
+                            Write-Verbose 'Send Secure MFA re-registration link or schedule live re-proofing session.'
+                        }
+                        'UpdateTicket' {
+                            Write-Verbose 'Update ticketing/ITSM system with remediation details and SLA compliance.'
+                        }
+                    }
+                }
+
+                $executedSteps += $step.Step
+            }
+        }
+
+        $results += [pscustomobject]@{
+            PlaybookId        = 'MFA-PL-001'
+            DetectionId       = $detectionId
+            UserPrincipalName = $user
+            MethodType        = $methodType
+            ExecutedSteps     = $executedSteps
+            IsSimulation      = $isSimulation
+            GraphValidated    = (-not $SkipGraphValidation)
+            NotificationsSent = (-not $NoUserNotification)
+            ControlOwner      = $metadata.ControlOwner
+            ResponseSlaHours  = $metadata.ResponseSlaHours
+            ReviewCadenceDays = $metadata.ReviewCadenceDays
+        }
+    }
+
+    end {
+        return $results
+    }
+}
+
+function Invoke-MfaPlaybookEnforcePrivilegedRoleMfa {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Detection,
+
+        [switch] $SkipGraphValidation,
+        [switch] $NoUserNotification,
+        [switch] $NoTicketUpdate
+    )
+
+    begin {
+        $results = @()
+    }
+
+    process {
+        if (-not $Detection) {
+            throw "Detection input is required. Pipe the object emitted by MFA-DET-003 once implemented or specify -Detection."
+        }
+
+        $detectionId = if ($Detection.PSObject.Properties['DetectionId']) { [string]$Detection.DetectionId } else { $null }
+        if ($detectionId -and $detectionId -ne 'MFA-DET-003') {
+            Write-Warning ("Playbook MFA-PL-003 targets detection 'MFA-DET-003'. Input '{0}' may not be compatible." -f $detectionId)
+        }
+
+        $user = if ($Detection.PSObject.Properties['UserPrincipalName']) { [string]$Detection.UserPrincipalName } else { $null }
+        if (-not $user) {
+            throw "Detection input does not include 'UserPrincipalName'. Cannot proceed."
+        }
+
+        $privilegedRoles = @()
+        if ($Detection.PSObject.Properties['PrivilegedRoles']) {
+            $privilegedRoles = @($Detection.PrivilegedRoles | Where-Object { $_ })
+        }
+        elseif ($Detection.PSObject.Properties['Roles']) {
+            $privilegedRoles = @($Detection.Roles | Where-Object { $_ })
+        }
+
+        $severity = if ($Detection.PSObject.Properties['Severity'] -and $Detection.Severity) { [string]$Detection.Severity } else { 'High' }
+        $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-DET-003' -Severity $severity
+
+        if (-not $SkipGraphValidation) {
+            $context = Get-MfaGraphContext
+            if (-not $context) {
+                throw "Microsoft Graph context not found. Run Connect-MfaGraphDeviceCode or use -SkipGraphValidation to bypass this check."
+            }
+        }
+
+        $steps = @(
+            @{
+                Step = 'Review role assignments'
+                Description = "Review privileged role membership for $user and confirm necessity."
+                Key = 'ReviewRoles'
+            },
+            @{
+                Step = 'Assess exemptions'
+                Description = "Check for approved MFA exemptions or break-glass status."
+                Key = 'AssessExemptions'
+            },
+            @{
+                Step = 'Enable MFA enforcement'
+                Description = "Apply or re-enable MFA enforcement, adding compliant factors."
+                Key = 'EnableMfa'
+            },
+            @{
+                Step = 'Validate conditional access'
+                Description = "Ensure conditional access policies cover $user and privileged roles."
+                Key = 'ValidateCA'
+            },
+            @{
+                Step = 'Notify stakeholders'
+                Description = "Inform the user and IAM governance of the change."
+                Key = 'NotifyStakeholders'
+                Skip = { $NoUserNotification }
+            },
+            @{
+                Step = 'Update ticket'
+                Description = "Document remediation actions and schedule follow-up verification."
+                Key = 'UpdateTicket'
+                Skip = { $NoTicketUpdate }
+            }
+        )
+
+        $executedSteps = @()
+        $skippedSteps = @()
+        $isSimulation = ($WhatIfPreference -eq $true)
+        $stepNumber = 0
+
+        foreach ($step in $steps) {
+            $stepNumber++
+            $skipFn = $step['Skip']
+            if ($skipFn -and (& $skipFn)) {
+                Write-Verbose ("Skipping step '{0}' per operator preference." -f $step.Step)
+                $skippedSteps += $step.Step
+                continue
+            }
+
+            $action = "{0}/{1}: {2}" -f $stepNumber, $steps.Count, $step.Description
+            $shouldProcess = $PSCmdlet.ShouldProcess($user, $step.Step)
+            if ($shouldProcess -or $isSimulation) {
+                if ($isSimulation) {
+                    Write-Verbose ("[SIMULATION] {0}" -f $action)
+                }
+                elseif ($shouldProcess) {
+                    Write-Host ("Step {0}" -f $action) -ForegroundColor Cyan
+                    switch ($step.Key) {
+                        'ReviewRoles' {
+                            Write-Verbose 'Enumerate role assignments (Get-MgRoleManagementDirectoryRoleAssignmentScheduleInstance).'
+                        }
+                        'AssessExemptions' {
+                            Write-Verbose 'Check for approved exemptions or break-glass flags before making changes.'
+                        }
+                        'EnableMfa' {
+                            Write-Verbose 'Apply MFA enforcement and seed strong methods (e.g., FIDO2, Authenticator).'
+                        }
+                        'ValidateCA' {
+                            Write-Verbose 'Verify applicable conditional access policies include the user and privileged groups.'
+                        }
+                        'NotifyStakeholders' {
+                            if ($NoUserNotification) {
+                                Write-Verbose 'Notifications suppressed by -NoUserNotification.'
+                            }
+                            else {
+                                Write-Verbose 'Notify user, IAM governance, and change-management queue.'
+                            }
+                        }
+                        'UpdateTicket' {
+                            if ($NoTicketUpdate) {
+                                Write-Verbose 'Ticket updates suppressed by -NoTicketUpdate.'
+                            }
+                            else {
+                                Write-Verbose 'Update ticketing/ITSM system with remediation evidence.'
+                            }
+                        }
+                    }
+                }
+
+                $executedSteps += $step.Step
+            }
+        }
+
+        $results += [pscustomobject]@{
+            PlaybookId        = 'MFA-PL-003'
+            DetectionId       = $detectionId
+            UserPrincipalName = $user
+            PrivilegedRoles   = $privilegedRoles
+            ExecutedSteps     = $executedSteps
+            SkippedSteps      = $skippedSteps
+            IsSimulation      = $isSimulation
+            GraphValidated    = (-not $SkipGraphValidation)
+            NotificationsSent = (-not $NoUserNotification)
+            TicketUpdated     = (-not $NoTicketUpdate)
+            ControlOwner      = $metadata.ControlOwner
+            ResponseSlaHours  = $metadata.ResponseSlaHours
+            ReviewCadenceDays = $metadata.ReviewCadenceDays
+        }
+    }
+
+    end {
+        return $results
+    }
+}
+
+function Invoke-MfaPlaybookContainHighRiskSignin {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Detection,
+
+        [switch] $SkipGraphValidation,
+        [switch] $NoUserNotification,
+        [switch] $NoTicketUpdate
+    )
+
+    begin {
+        $results = @()
+    }
+
+    process {
+        if (-not $Detection) {
+            throw "Detection input is required. Pipe the object emitted by Invoke-MfaDetectionHighRiskSignin or specify -Detection."
+        }
+
+        $detectionId = if ($Detection.PSObject.Properties['DetectionId']) { [string]$Detection.DetectionId } else { $null }
+        if ($detectionId -and $detectionId -ne 'MFA-DET-002') {
+            Write-Warning ("Playbook MFA-PL-002 targets detection 'MFA-DET-002'. Input '{0}' may not be compatible." -f $detectionId)
+        }
+
+        $user = if ($Detection.PSObject.Properties['UserPrincipalName']) { [string]$Detection.UserPrincipalName } else { $null }
+        if (-not $user) {
+            throw "Detection input does not include 'UserPrincipalName'. Cannot proceed."
+        }
+
+        $correlationId = if ($Detection.PSObject.Properties['CorrelationId']) { [string]$Detection.CorrelationId } else { $null }
+        $riskState = if ($Detection.PSObject.Properties['RiskState']) { [string]$Detection.RiskState } else { $null }
+        $riskDetail = if ($Detection.PSObject.Properties['RiskDetail']) { [string]$Detection.RiskDetail } else { $null }
+        $severity = if ($Detection.PSObject.Properties['Severity'] -and $Detection.Severity) { [string]$Detection.Severity } else { 'High' }
+        $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-DET-002' -Severity $severity
+
+        if (-not $SkipGraphValidation) {
+            $context = Get-MfaGraphContext
+            if (-not $context) {
+                throw "Microsoft Graph context not found. Run Connect-MfaGraphDeviceCode or use -SkipGraphValidation to bypass this check."
+            }
+        }
+
+        $steps = @(
+            @{
+                Step = 'Revoke sessions'
+                Description = "Revoke refresh tokens and active sessions for $user (e.g., Revoke-MgUserSignInSession)."
+                Key = 'RevokeSessions'
+            },
+            @{
+                Step = 'Force password reset'
+                Description = "Initiate secure password reset and flag account for review."
+                Key = 'ForcePasswordReset'
+            },
+            @{
+                Step = 'Require MFA re-registration'
+                Description = "Coordinate or trigger MFA factor reset to ensure trusted methods only."
+                Key = 'RequireReregistration'
+            },
+            @{
+                Step = 'Notify stakeholders'
+                Description = "Notify the user, SecOps bridge, and incident commander about containment actions."
+                Key = 'NotifyStakeholders'
+                Skip = { $NoUserNotification }
+            },
+            @{
+                Step = 'Update incident/ticket'
+                Description = "Update the incident record with actions, timestamps, and next steps."
+                Key = 'UpdateTicket'
+                Skip = { $NoTicketUpdate }
+            }
+        )
+
+        $executedSteps = @()
+        $skippedSteps = @()
+        $isSimulation = ($WhatIfPreference -eq $true)
+        $stepNumber = 0
+
+        foreach ($step in $steps) {
+            $stepNumber++
+            $skipFn = $step['Skip']
+            if ($skipFn -and (& $skipFn)) {
+                Write-Verbose ("Skipping step '{0}' per operator preference." -f $step.Step)
+                $skippedSteps += $step.Step
+                continue
+            }
+
+            $action = "{0}/{1}: {2}" -f $stepNumber, $steps.Count, $step.Description
+            $shouldProcess = $PSCmdlet.ShouldProcess($user, $step.Step)
+            if ($shouldProcess -or $isSimulation) {
+                if ($isSimulation) {
+                    Write-Verbose ("[SIMULATION] {0}" -f $action)
+                }
+                elseif ($shouldProcess) {
+                    Write-Host ("Step {0}" -f $action) -ForegroundColor Cyan
+                    switch ($step.Key) {
+                        'RevokeSessions' {
+                            Write-Verbose 'Call Microsoft Graph to revoke active sessions (e.g., Revoke-MgUserSignInSession).'
+                        }
+                        'ForcePasswordReset' {
+                            Write-Verbose 'Trigger secure password reset (Set-MgUser -ForceChangePasswordNextSignIn:$true) and coordinate follow-up.'
+                        }
+                        'RequireReregistration' {
+                            Write-Verbose 'Initiate MFA re-proofing by invoking MFA reset routines or coordinating with IAM.'
+                        }
+                        'NotifyStakeholders' {
+                            if ($NoUserNotification) {
+                                Write-Verbose 'Notifications suppressed by -NoUserNotification.'
+                            }
+                            else {
+                                Write-Verbose 'Send alert to affected user, SecOps bridge, and incident commander.'
+                            }
+                        }
+                        'UpdateTicket' {
+                            if ($NoTicketUpdate) {
+                                Write-Verbose 'Ticket updates suppressed by -NoTicketUpdate.'
+                            }
+                            else {
+                                Write-Verbose 'Update incident/ticket with containment summary, timestamps, and SLA checks.'
+                            }
+                        }
+                    }
+                }
+
+                $executedSteps += $step.Step
+            }
+        }
+
+        $results += [pscustomobject]@{
+            PlaybookId        = 'MFA-PL-002'
+            DetectionId       = $detectionId
+            UserPrincipalName = $user
+            CorrelationId     = $correlationId
+            RiskState         = $riskState
+            RiskDetail        = $riskDetail
+            ExecutedSteps     = $executedSteps
+            SkippedSteps      = $skippedSteps
+            IsSimulation      = $isSimulation
+            GraphValidated    = (-not $SkipGraphValidation)
+            NotificationsSent = (-not $NoUserNotification)
+            TicketUpdated     = (-not $NoTicketUpdate)
+            ControlOwner      = $metadata.ControlOwner
+            ResponseSlaHours  = $metadata.ResponseSlaHours
+            ReviewCadenceDays = $metadata.ReviewCadenceDays
+        }
+    }
+
+    end {
+        return $results
+    }
+}
+
+function Invoke-MfaPlaybookTriageSuspiciousScore {
+    [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'Medium')]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Score,
+
+        [switch] $NoTicketUpdate
+    )
+
+    begin {
+        $results = @()
+    }
+
+    process {
+        if (-not $Score) {
+            throw "Score input is required. Pipe the object emitted by Invoke-MfaSuspiciousActivityScore or specify -Score."
+        }
+
+        $user = if ($Score.PSObject.Properties['UserPrincipalName']) { [string]$Score.UserPrincipalName } else { $null }
+        if (-not $user) {
+            throw "Score input does not include 'UserPrincipalName'. Cannot proceed."
+        }
+
+        $severity = if ($Score.PSObject.Properties['Severity'] -and $Score.Severity) { [string]$Score.Severity } else { 'Informational' }
+        $scoreValue = if ($Score.PSObject.Properties['Score']) { [int]$Score.Score } else { 0 }
+        $indicators = if ($Score.PSObject.Properties['Indicators']) { @($Score.Indicators) } else { @() }
+        $metadata = Resolve-MfaDetectionMetadata -DetectionId 'MFA-SCORE' -Severity $severity
+
+        $steps = @(
+            @{
+                Step = 'Review indicators'
+                Description = "Review score indicators and summarize suspicious signals."
+                Key = 'ReviewIndicators'
+            },
+            @{
+                Step = 'Correlate additional signals'
+                Description = 'Pull recent sign-ins, Identity Protection alerts, and related tickets.'
+                Key = 'CorrelateSignals'
+            },
+            @{
+                Step = 'Engage user or service owner'
+                Description = "Contact $user or delegated owner to validate activity."
+                Key = 'EngageUser'
+            },
+            @{
+                Step = 'Decide containment'
+                Description = 'Decide whether to escalate to containment playbooks or continue monitoring.'
+                Key = 'DecideContainment'
+            },
+            @{
+                Step = 'Update ticket'
+                Description = 'Document triage outcome, SLA status, and next steps.'
+                Key = 'UpdateTicket'
+                Skip = { $NoTicketUpdate }
+            }
+        )
+
+        $executedSteps = @()
+        $skippedSteps = @()
+        $isSimulation = ($WhatIfPreference -eq $true)
+        $stepNumber = 0
+
+        foreach ($step in $steps) {
+            $stepNumber++
+            $skipFn = $step['Skip']
+            if ($skipFn -and (& $skipFn)) {
+                Write-Verbose ("Skipping step '{0}' per operator preference." -f $step.Step)
+                $skippedSteps += $step.Step
+                continue
+            }
+
+            $action = "{0}/{1}: {2}" -f $stepNumber, $steps.Count, $step.Description
+            $shouldProcess = $PSCmdlet.ShouldProcess($user, $step.Step)
+            if ($shouldProcess -or $isSimulation) {
+                if ($isSimulation) {
+                    Write-Verbose ("[SIMULATION] {0}" -f $action)
+                }
+                elseif ($shouldProcess) {
+                    Write-Host ("Step {0}" -f $action) -ForegroundColor Cyan
+                    switch ($step.Key) {
+                        'ReviewIndicators' {
+                            Write-Verbose ("Indicators: {0}" -f ($indicators | ForEach-Object { $_.Type } -join ', '))
+                        }
+                        'CorrelateSignals' {
+                            Write-Verbose 'Query recent sign-ins and Identity Protection risk events for additional context.'
+                        }
+                        'EngageUser' {
+                            Write-Verbose 'Reach out to the user/service owner using secure communication channels.'
+                        }
+                        'DecideContainment' {
+                            Write-Verbose 'Determine whether to escalate to MFA-PL-002 or continue monitoring.'
+                        }
+                        'UpdateTicket' {
+                            if ($NoTicketUpdate) {
+                                Write-Verbose 'Ticket updates suppressed by -NoTicketUpdate.'
+                            }
+                            else {
+                                Write-Verbose 'Record triage outcome, SLA status, and recommended actions.'
+                            }
+                        }
+                    }
+                }
+
+                $executedSteps += $step.Step
+            }
+        }
+
+        $recommendedAction = 'Monitor'
+        $suggestContainment = $false
+        if ($severity -in @('Critical', 'High')) {
+            $recommendedAction = 'Launch MFA-PL-002 containment'
+            $suggestContainment = $true
+        }
+
+        $results += [pscustomobject]@{
+            PlaybookId           = 'MFA-PL-004'
+            SignalId             = if ($Score.PSObject.Properties['SignalId']) { $Score.SignalId } else { 'MFA-SCORE' }
+            UserPrincipalName    = $user
+            Score                = $scoreValue
+            Severity             = $severity
+            Indicators           = $indicators
+            ExecutedSteps        = $executedSteps
+            SkippedSteps         = $skippedSteps
+            RecommendedAction    = $recommendedAction
+            SuggestContainment   = $suggestContainment
+            IsSimulation         = $isSimulation
+            TicketUpdated        = (-not $NoTicketUpdate)
+            ControlOwner         = $metadata.ControlOwner
+            ResponseSlaHours     = $metadata.ResponseSlaHours
+            ReviewCadenceDays    = $metadata.ReviewCadenceDays
+        }
+    }
+
+    end {
+        return $results
+    }
+}
+
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookTriageSuspiciousScore

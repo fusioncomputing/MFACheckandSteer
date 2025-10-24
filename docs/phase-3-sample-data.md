@@ -5,8 +5,8 @@ To support local development and automated tests without hitting live tenants, t
 ## Provided Assets
 | File | Description |
 |------|-------------|
-| `data/samples/entra-signins-sample.json` | Two canonical sign-in records demonstrating success/failure scenarios. |
-| `data/samples/entra-registrations-sample.json` | Canonical registration records covering phone and FIDO2 methods. |
+| `data/samples/entra-signins-sample.json` | Canonical sign-in records covering success/failure cases, impossible travel, repeated MFA failures, and privileged admin activity. |
+| `data/samples/entra-registrations-sample.json` | Canonical registration records covering phone, FIDO2, and recent fallback-to-SMS scenarios. |
 | `scripts/replay-samples.ps1` | Loads the sample JSON and prints a summary or emits raw JSON for pipelines. |
 
 All samples are fabricated; IDs, IP addresses, and timestamps are safe for public use.

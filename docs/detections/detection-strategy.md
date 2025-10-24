@@ -23,6 +23,21 @@ This document defines the initial detection philosophy, rule catalog, and develo
 | MFA-DET-004 | Repeated MFA Failures | Medium | Sign-in records | Trigger when a user experiences > `N` MFA failures within `T` minutes. |
 | MFA-DET-005 | Impossible Travel + MFA Success | High | Sign-in records | Combine impossible travel detection output with successful MFA to prompt review for MFA fatigue attacks. |
 
+## Suspicious Activity Scoring (Phase 4.2)
+In addition to discrete detections, Phase 4 introduces an aggregate scoring helper (`Invoke-MfaSuspiciousActivityScore`) that correlates multiple weak signals—impossible travel, repeated failures, unfamiliar devices, and recent MFA factor downgrades. The scoring model and weights are documented in `docs/detections/phase-4-suspicious-activity-scoring.md` and provide a prioritization layer for SecOps queues.
+
+## Framework Alignment & Reporting Tags (Phase 4.3)
+Roadmap task 4.3 adds governance context by mapping detections to MITRE ATT&CK, NIST CSF, and standardized reporting tags. Refer to `docs/detections/phase-4-framework-mapping.md` for canonical mappings that must be reflected in code and documentation.
+
+## Synthetic Incident Scenarios (Phase 4.4)
+To validate detections end-to-end, Phase 4.4 introduces curated scenarios captured in `docs/detections/phase-4-incident-scenarios.md`, with corresponding datasets under `data/scenarios/` and the replay harness `scripts/replay-scenarios.ps1`.
+
+## Detection Configuration & Tuning (Phase 4.5)
+Phase 4.5 formalizes configurable thresholds and guardrails via `config/detections.json`. The module exposes helpers to retrieve merged defaults, and detections automatically respect overrides unless parameters are supplied explicitly. See `docs/detections/phase-4-configuration.md` for guidance.
+
+## Controls Catalog & SLAs (Phase 4.6)
+Operational responsibilities are documented in `docs/detections/phase-4-controls-catalog.md`, aligning each detection and score with control owners, response SLAs, and review cadences. Detection outputs surface the same metadata so automation and reporting can enforce timelines and escalations.
+
 > As the library grows, detections will be grouped by category (Configuration, Authentication Activity, Threat Correlation).
 
 ## Rule Specification Template (stored under `docs/detections/rules/`)
@@ -49,6 +64,9 @@ Each rule file will contain:
 - Next steps outlined for implementing the first detection (likely MFA-DET-002 or MFA-DET-004).
 
 ## Next Actions
-1. Extend sample datasets to include positive/negative cases for each detection and integrate with automated regression tests.
+1. Extend sample datasets to include positive/negative cases for each detection and integrate with automated regression tests. (Initial coverage added for Phase 4.2 scoring scenarios.)
 2. Publish rule specs for MFA-DET-003 through MFA-DET-005 following the established template.
-3. Wire detections into reporting outputs (e.g., summary dashboards) and map to response playbooks in Phase 5.
+3. Wire detections and aggregated scores into reporting outputs (e.g., summary dashboards) and map to response playbooks in Phase 5. (Phase 4.3 mappings supply framework and reporting tags for automation.)
+4. Maintain synthetic incident scenarios alongside new detections to ensure regression coverage across evolving telemetry inputs.
+5. Track configuration changes and ensure overrides remain consistent with documented guardrails (Phase 4.5).
+6. Incorporate SLA metrics into ticketing and dashboards, escalating overdue detections per the controls catalog (Phase 4.6).

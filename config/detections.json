@@ -1,0 +1,26 @@
+{
+  "MFA-DET-001": {
+    "DormantDays": 90
+  },
+  "MFA-DET-002": {
+    "ObservationHours": 24,
+    "RiskDetailExclusions": [
+      "none",
+      "unknownFutureValue",
+      ""
+    ]
+  },
+  "MFA-SCORE": {
+    "ObservationHours": 24,
+    "FailureThreshold": 3,
+    "FailureWindowMinutes": 30,
+    "TravelWindowMinutes": 120,
+    "RecentRegistrationDays": 7,
+    "WeakMethodTypes": [
+      "phoneAuthenticationMethod",
+      "temporaryAccessPassAuthenticationMethod",
+      "smsAuthenticationMethod",
+      "voiceAuthenticationMethod"
+    ]
+  }
+}

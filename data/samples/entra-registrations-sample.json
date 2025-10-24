@@ -32,5 +32,21 @@
     "AdditionalData": {
       "aaguid": "08987058-cacd-4b81-b6e1-30de50dcbe96"
     }
+  },
+  {
+    "RecordType": "Registration",
+    "UserPrincipalName": "security.admin@example.com",
+    "UserId": "33333333-3333-3333-3333-333333333333",
+    "MethodId": "phone-default-admin",
+    "MethodType": "phoneAuthenticationMethod",
+    "DisplayName": "Security Admin Mobile",
+    "IsDefault": true,
+    "IsUsable": true,
+    "PhoneNumber": "+15551230002",
+    "PhoneType": "mobile",
+    "KeyDeviceId": null,
+    "CreatedDateTime": "2025-10-22T14:45:00Z",
+    "LastUpdatedDateTime": "2025-10-22T14:50:00Z",
+    "AdditionalData": null
   }
 ]

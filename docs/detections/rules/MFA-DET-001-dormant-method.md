@@ -35,9 +35,19 @@ $records
 - Some method types (e.g., FIDO2 keys) rarely rotate; tune severity or exclusions for approved devices.
 - Tenants without `LastUpdatedDateTime` values should default to manual review.
 
+## Framework Alignment
+- **MITRE ATT&CK**: `T1078` (Valid Accounts)
+- **NIST CSF**: `PR.AC-1`, `PR.AC-6`
+
+## Reporting Tags
+- `Configuration`
+- `MFA`
+- `DormantMethod`
+- `Risk-Medium`
+
 ## Response Mapping
 - Review with user to confirm method is still valid.
-- If method is obsolete, enforce re-registration via MFA reset playbook (Phase 5).
+- If method is obsolete, enforce re-registration via playbook `MFA-PL-001` (`Invoke-MfaPlaybookResetDormantMethod`) and capture evidence in the ticket.
 
 ## Testing
 - Create sample registration entries in `data/samples/` where `LastUpdatedDateTime` is older than the threshold and verify detection triggers.

@@ -35,9 +35,18 @@ Get-MfaEntraSignIn -Normalize -StartTime (Get-Date).AddHours(-24) -EndTime (Get-
 - Ensure beta profile is selected when retrieving sign-ins so risk details are populated.
 - Coordinate with SOC on expected false positives (e.g., known geolocation anomalies).
 
+## Framework Alignment
+- **MITRE ATT&CK**: `T1110.003` (Password Spraying), `T1621` (Multi-Factor Authentication Interception)
+- **NIST CSF**: `DE.AE-2`, `DE.CM-7`
+
+## Reporting Tags
+- `Authentication`
+- `HighRiskSignin`
+- `Risk-High`
+
 ## Response Mapping
 - Immediate user outreach to confirm sign-in legitimacy.
-- Enforce step-up (password reset / factor rotation) if suspicious.
+- Execute playbook `MFA-PL-002` (`Invoke-MfaPlaybookContainHighRiskSignin`) to revoke sessions, trigger password reset, and escalate the incident ticket.
 - Log incident in ticketing system with correlation ID for deeper investigation.
 
 ## Testing
