@@ -703,6 +703,74 @@ Describe 'Invoke-MfaScenarioReport' {
     }
 }
 
+Describe 'Invoke-MfaTenantReport' {
+    InModuleScope MFACheckandSteer {
+        It 'collects live data and delegates to scenario report' {
+            $script:CapturedScenario = $null
+
+            Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith {
+                @{ TenantId = '00000000-0000-0000-0000-000000000000' }
+            }
+
+            Mock -CommandName Get-MfaEntraSignIn -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    RecordType        = 'SignIn'
+                    UserPrincipalName = 'tenant@example.com'
+                    CreatedDateTime   = '2025-10-30T12:00:00Z'
+                }
+            }
+
+            Mock -CommandName Get-MfaEntraRegistration -ModuleName MFACheckandSteer -MockWith {
+                param($UserId)
+                [pscustomobject]@{
+                    RecordType        = 'Registration'
+                    UserPrincipalName = $UserId
+                    MethodType        = 'smsAuthenticationMethod'
+                    IsDefault         = $true
+                    LastUpdatedDateTime = '2025-05-01T00:00:00Z'
+                }
+            }
+
+            Mock -CommandName Invoke-MfaScenarioReport -ModuleName MFACheckandSteer -MockWith {
+                param(
+                    [pscustomobject] $Scenario,
+                    $OutputDirectory,
+                    $SkipAuthorization,
+                    $OpenReport,
+                    $PassThru
+                )
+                $script:CapturedScenario = $Scenario
+                [pscustomobject]@{
+                    ScenarioPath        = $null
+                    DetectionCount      = 2
+                    PlaybookCount       = 1
+                    HtmlReport          = 'C:\reports\tenant-report.html'
+                    TicketOutputs       = @()
+                    NotificationOutputs = @()
+                    OutputDirectory     = 'C:\reports'
+                    BestPracticeNotes   = @()
+                    BestPracticeCount   = 0
+                }
+            }
+
+            $result = Invoke-MfaTenantReport -LookbackHours 12 -UserPrincipalName 'tenant@example.com' -PassThru
+
+            $result.HtmlReport | Should -Be 'C:\reports\tenant-report.html'
+            $result.LookbackHours | Should -Be 12
+            $result.SignInCount | Should -Be 1
+            $result.RegistrationCount | Should -Be 1
+            $result.RoleAssignmentCount | Should -Be 0
+
+            $script:CapturedScenario | Should -Not -BeNullOrEmpty
+            @($script:CapturedScenario.SignIns).Count | Should -BeGreaterThan 0
+
+            Assert-MockCalled Get-MfaEntraSignIn -ModuleName MFACheckandSteer -Times 1
+            Assert-MockCalled Get-MfaEntraRegistration -ModuleName MFACheckandSteer -Times 1
+            Assert-MockCalled Invoke-MfaScenarioReport -ModuleName MFACheckandSteer -Times 1
+        }
+    }
+}
+
 Describe 'New-MfaHtmlReport' {
     InModuleScope MFACheckandSteer {
         It 'creates HTML summary with detections and playbooks' {

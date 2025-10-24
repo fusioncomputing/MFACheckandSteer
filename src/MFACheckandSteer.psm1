@@ -133,6 +133,11 @@ function Invoke-MfaGraphSignInQuery {
         ConsistencyLevel = 'eventual'
     }
 
+    $signInCommand = Get-Command -Name Get-MgAuditLogSignIn -ErrorAction SilentlyContinue
+    if (-not $signInCommand -or -not $signInCommand.Parameters.ContainsKey('ConsistencyLevel')) {
+        $null = $params.Remove('ConsistencyLevel')
+    }
+
     if ($All.IsPresent) {
         $params['All'] = $true
     }
@@ -169,7 +174,8 @@ function Connect-MfaGraphDeviceCode {
             'Policy.Read.All',
             'Directory.Read.All',
             'UserAuthenticationMethod.Read.All',
-            'IdentityRiskyUser.Read.All'
+            'IdentityRiskyUser.Read.All',
+            'RoleManagement.Read.Directory'
         ),
         [switch] $SkipBetaProfile
     )
@@ -468,6 +474,112 @@ function Get-MfaEntraRegistration {
 
         return $results
     }
+}
+
+function Get-MfaDirectoryRoleAssignment {
+    [CmdletBinding()]
+    param(
+        [switch] $Normalize,
+        [int] $MaxRetries = 3
+    )
+
+    $context = Get-MfaGraphContext
+    if (-not $context) {
+        throw "Microsoft Graph context not found. Run Connect-MgGraph before calling Get-MfaDirectoryRoleAssignment."
+    }
+
+    $baseUri = 'https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments'
+    $expandQuery = '$expand=principal($select=id,displayName,userPrincipalName)'
+    $expandQuery = $expandQuery.Trim()
+    $results = @()
+    $nextLink = [string]::Concat($baseUri, '?', $expandQuery)
+
+    while ($nextLink) {
+        $response = Invoke-MfaGraphWithRetry -MaxRetries $MaxRetries -Operation {
+            Invoke-MgGraphRequest -Method GET -Uri $nextLink
+        }
+
+        if ($response.value) {
+            $results += $response.value
+        }
+
+        $nextLink = Get-MfaDynamicPropertyValue -InputObject $response -PropertyName '@odata.nextLink'
+    }
+
+    if (-not $Normalize) {
+        return $results
+    }
+
+    $roleDefinitionMap = @{}
+    try {
+        $definitionNextLink = 'https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?$select=id,displayName'
+        while ($definitionNextLink) {
+            $definitionsResponse = Invoke-MfaGraphWithRetry -MaxRetries $MaxRetries -Operation {
+                Invoke-MgGraphRequest -Method GET -Uri $definitionNextLink
+            }
+
+            if ($definitionsResponse.value) {
+                foreach ($definition in $definitionsResponse.value) {
+                    $id = Get-MfaDynamicPropertyValue -InputObject $definition -PropertyName 'id'
+                    $display = Get-MfaDynamicPropertyValue -InputObject $definition -PropertyName 'displayName'
+                    if ($id -and $display) {
+                        $roleDefinitionMap[$id] = $display
+                    }
+                }
+            }
+
+            $definitionNextLink = Get-MfaDynamicPropertyValue -InputObject $definitionsResponse -PropertyName '@odata.nextLink'
+        }
+    }
+    catch {
+        Write-Warning ("Failed to retrieve role definitions: {0}" -f $_.Exception.Message)
+    }
+
+    $normalized = foreach ($assignment in $results) {
+        if (-not $assignment) { continue }
+
+        $principal = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'principal'
+        $roleDefinition = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'roleDefinition'
+
+        $principalUpn = $null
+        $principalDisplay = $null
+        $principalType = $null
+        if ($principal) {
+            $principalUpn = Get-MfaDynamicPropertyValue -InputObject $principal -PropertyName 'userPrincipalName'
+            $principalDisplay = Get-MfaDynamicPropertyValue -InputObject $principal -PropertyName 'displayName'
+            $principalType = Get-MfaDynamicPropertyValue -InputObject $principal -PropertyName '@odata.type'
+        }
+
+        if (-not $principalType) {
+            $principalType = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'principalType'
+        }
+
+        $roleDisplay = $null
+        $roleDefinitionId = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'roleDefinitionId'
+        if ($roleDefinition) {
+            $roleDisplay = Get-MfaDynamicPropertyValue -InputObject $roleDefinition -PropertyName 'displayName'
+        }
+        if (-not $roleDisplay) {
+            $roleDisplay = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'roleDefinitionDisplayName'
+        }
+        if (-not $roleDisplay -and $roleDefinitionId -and $roleDefinitionMap.ContainsKey([string]$roleDefinitionId)) {
+            $roleDisplay = $roleDefinitionMap[[string]$roleDefinitionId]
+        }
+
+        [pscustomobject]@{
+            RoleAssignmentId          = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'id'
+            RoleDefinitionId          = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'roleDefinitionId'
+            RoleDefinitionDisplayName = $roleDisplay
+            RoleDefinitionName        = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'roleDefinitionName'
+            PrincipalId               = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'principalId'
+            UserPrincipalName         = $principalUpn
+            UserDisplayName           = $principalDisplay
+            PrincipalType             = $principalType
+            AssignmentState           = Get-MfaDynamicPropertyValue -InputObject $assignment -PropertyName 'assignmentState'
+        }
+    }
+
+    return $normalized
 }
 
 function ConvertTo-MfaDateTime {
@@ -3922,13 +4034,16 @@ function New-MfaHtmlReport {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification, Invoke-MfaPlaybookOutputs, New-MfaHtmlReport, Invoke-MfaScenarioReport
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification, Invoke-MfaPlaybookOutputs, New-MfaHtmlReport, Invoke-MfaScenarioReport, Invoke-MfaTenantReport
 
 function Invoke-MfaScenarioReport {
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = 'Path')]
     param(
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, ParameterSetName = 'Path')]
         [string] $ScenarioPath,
+
+        [Parameter(Mandatory, ParameterSetName = 'Object')]
+        [psobject] $Scenario,
 
         [string] $OutputDirectory,
         [switch] $SkipAuthorization,
@@ -3936,12 +4051,29 @@ function Invoke-MfaScenarioReport {
         [switch] $PassThru
     )
 
-    if (-not (Test-Path -Path $ScenarioPath)) {
-        throw "Scenario file '$ScenarioPath' was not found."
-    }
+    $rawScenario = $null
+    $scenarioSource = $null
 
-    Write-Verbose ("Loading scenario from '{0}'." -f $ScenarioPath)
-    $rawScenario = Get-Content -Path $ScenarioPath -Raw | ConvertFrom-Json
+    if ($PSCmdlet.ParameterSetName -eq 'Path') {
+        if (-not (Test-Path -Path $ScenarioPath)) {
+            throw "Scenario file '$ScenarioPath' was not found."
+        }
+
+        Write-Verbose ("Loading scenario from '{0}'." -f $ScenarioPath)
+        $rawScenario = Get-Content -Path $ScenarioPath -Raw | ConvertFrom-Json
+        try {
+            $scenarioSource = (Resolve-Path -Path $ScenarioPath).ProviderPath
+        }
+        catch {
+            $scenarioSource = $ScenarioPath
+        }
+    }
+    else {
+        if (-not $Scenario) {
+            throw "Scenario object input is empty. Provide a populated object via -Scenario."
+        }
+        $rawScenario = $Scenario
+    }
 
     $signIns = @()
     if ($rawScenario.PSObject.Properties['SignIns']) {
@@ -4179,7 +4311,7 @@ function Invoke-MfaScenarioReport {
     Write-Verbose ("HTML report saved to: {0}" -f $report.Path)
 
     $result = [pscustomobject]@{
-        ScenarioPath     = (Resolve-Path -Path $ScenarioPath).ProviderPath
+        ScenarioPath     = $scenarioSource
         DetectionCount   = $allDetections.Count
         PlaybookCount    = $playbookOutputs.Count
         HtmlReport       = $report.Path
@@ -4198,4 +4330,117 @@ function Invoke-MfaScenarioReport {
     }
 }
 
-Export-ModuleMember -Function Invoke-MfaScenarioReport
+function Invoke-MfaTenantReport {
+    [CmdletBinding()]
+    param(
+        [ValidateRange(1, 720)]
+        [int] $LookbackHours = 24,
+        [datetime] $ReferenceTime,
+        [string[]] $UserPrincipalName,
+        [string[]] $RegistrationUserPrincipalName,
+        [psobject[]] $RoleAssignments,
+        [switch] $IncludePrivilegedRoleAudit,
+        [string] $OutputDirectory,
+        [switch] $SkipAuthorization,
+        [switch] $OpenReport,
+        [switch] $PassThru
+    )
+
+    $graphContext = Get-MfaGraphContext
+    if (-not $graphContext) {
+        throw "Microsoft Graph context not found. Run Connect-MgGraph or scripts/connect-device-login.ps1 before invoking Invoke-MfaTenantReport."
+    }
+
+    $effectiveReferenceTime = if ($ReferenceTime) { $ReferenceTime } else { Get-Date }
+    $lookback = [int][math]::Max(1, [math]::Abs($LookbackHours))
+    $windowStart = $effectiveReferenceTime.AddHours(-$lookback)
+
+    Write-Verbose ("Collecting Entra sign-ins from {0} to {1}." -f $windowStart.ToString('u'), $effectiveReferenceTime.ToString('u'))
+
+    $signIns = @()
+    $targetUsers = @()
+    if ($UserPrincipalName) {
+        $targetUsers = @($UserPrincipalName | Where-Object { $_ }) | Sort-Object -Unique
+    }
+
+    if ($targetUsers.Count -gt 0) {
+        foreach ($user in $targetUsers) {
+            try {
+                $signIns += Get-MfaEntraSignIn -Normalize -StartTime $windowStart -EndTime $effectiveReferenceTime -UserPrincipalName $user -All
+            }
+            catch {
+                Write-Warning ("Failed to collect sign-ins for '{0}': {1}" -f $user, $_.Exception.Message)
+            }
+        }
+    }
+    else {
+        $signIns = Get-MfaEntraSignIn -Normalize -StartTime $windowStart -EndTime $effectiveReferenceTime -All
+    }
+
+    $registrationTargets = @()
+    if ($signIns) {
+        $registrationTargets += ($signIns | ForEach-Object { $_.UserPrincipalName } | Where-Object { $_ })
+    }
+    if ($UserPrincipalName) {
+        $registrationTargets += $UserPrincipalName
+    }
+    if ($RegistrationUserPrincipalName) {
+        $registrationTargets += $RegistrationUserPrincipalName
+    }
+
+    $registrationTargets = @($registrationTargets | Where-Object { $_ }) | Sort-Object -Unique
+
+    $registrations = @()
+    foreach ($target in $registrationTargets) {
+        try {
+            $registrations += Get-MfaEntraRegistration -UserId $target -Normalize
+        }
+        catch {
+            Write-Warning ("Failed to retrieve MFA registrations for '{0}': {1}" -f $target, $_.Exception.Message)
+        }
+    }
+
+    $roleAssignmentData = @()
+    if ($RoleAssignments) {
+        $roleAssignmentData = @($RoleAssignments | Where-Object { $_ })
+    }
+    elseif ($IncludePrivilegedRoleAudit) {
+        try {
+            $roleAssignmentData = Get-MfaDirectoryRoleAssignment -Normalize
+        }
+        catch {
+            Write-Warning ("Failed to retrieve directory role assignments: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    $scenarioPayload = [ordered]@{
+        ReferenceTime  = $effectiveReferenceTime.ToString('o')
+        SignIns        = $signIns
+        Registrations  = $registrations
+        RoleAssignments = $roleAssignmentData
+    }
+
+    $reportParams = @{
+        Scenario         = [pscustomobject]$scenarioPayload
+        OutputDirectory  = $OutputDirectory
+        SkipAuthorization = $SkipAuthorization
+        OpenReport        = $OpenReport
+        PassThru          = $true
+    }
+
+    $result = Invoke-MfaScenarioReport @reportParams
+
+    $result | Add-Member -NotePropertyName 'LookbackHours' -NotePropertyValue $lookback -Force
+    $result | Add-Member -NotePropertyName 'ReferenceTime' -NotePropertyValue $effectiveReferenceTime -Force
+    $result | Add-Member -NotePropertyName 'SignInCount' -NotePropertyValue $signIns.Count -Force
+    $result | Add-Member -NotePropertyName 'RegistrationCount' -NotePropertyValue $registrations.Count -Force
+    $result | Add-Member -NotePropertyName 'RoleAssignmentCount' -NotePropertyValue $roleAssignmentData.Count -Force
+
+    if ($PassThru) {
+        return $result
+    }
+
+    return $result.HtmlReport
+}
+
+Export-ModuleMember -Function Invoke-MfaScenarioReport, Invoke-MfaTenantReport
