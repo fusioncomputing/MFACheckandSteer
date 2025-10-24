@@ -3465,6 +3465,7 @@ function New-MfaHtmlReport {
     param(
         [psobject[]] $Detections,
         [psobject[]] $Playbooks,
+        [psobject[]] $BestPractices,
         [string] $Path,
         [switch] $OpenInBrowser
     )
@@ -3521,6 +3522,89 @@ function New-MfaHtmlReport {
                 Playbook           = $playbook
                 TicketTarget       = $ticketTarget
                 NotificationTarget = $notificationTarget
+            }
+        }
+    }
+
+    $bpCollection = @()
+    if ($BestPractices) {
+        $bpCollection = @($BestPractices | Where-Object { $_ })
+    }
+
+    $formatList = {
+        param([System.Collections.IEnumerable] $Items)
+
+        $values = @()
+        foreach ($item in $Items) {
+            if ($null -ne $item -and $item -ne '') {
+                $values += [string]$item
+            }
+        }
+
+        if ($values.Count -eq 0) {
+            return ''
+        }
+
+        $unique = $values | Sort-Object -Unique
+        if ($unique.Count -le 3) {
+            return $unique -join ', '
+        }
+
+        return (($unique[0..2] -join ', ') + ', …')
+    }
+
+    $fatigueNoteExists = $bpCollection | Where-Object {
+        $_.PSObject.Properties['Title'] -and $_.Title -eq 'Enforce number matching for Microsoft Authenticator push'
+    }
+    if (-not $fatigueNoteExists) {
+        $fatigueUsers = @()
+        $fatigueDetections = @($detCollection | Where-Object {
+            $_.PSObject.Properties['DetectionId'] -and $_.DetectionId -eq 'MFA-DET-004'
+        })
+        if ($fatigueDetections) {
+            $fatigueUsers += ($fatigueDetections | ForEach-Object { $_.UserPrincipalName })
+        }
+
+        $fatigueScores = @($detCollection | Where-Object {
+            $_.PSObject.Properties['Indicators'] -and
+            ((@($_.Indicators) | ForEach-Object { $_.Type }) -contains 'RepeatedFailures')
+        })
+        if ($fatigueScores) {
+            $fatigueUsers += ($fatigueScores | ForEach-Object { $_.UserPrincipalName })
+        }
+
+        $fatigueUsers = @($fatigueUsers | Where-Object { $_ }) | Sort-Object -Unique
+        if ($fatigueUsers.Count -gt 0) {
+            $evidenceStrings = @(
+                $fatigueDetections | ForEach-Object {
+                    if ($_.PSObject.Properties['FailureReasons'] -and $_.FailureReasons) {
+                        $_.FailureReasons
+                    }
+                }
+            ) | Where-Object { $_ }
+
+            $evidenceText = $null
+            if ($evidenceStrings) {
+                $flatEvidence = (($evidenceStrings -join ';') -split ';') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+                if ($flatEvidence) {
+                    $evidenceText = "Observed failure reasons: {0}" -f (($flatEvidence | Sort-Object -Unique) -join '; ')
+                }
+            }
+
+            $userSummary = & $formatList $fatigueUsers
+            $summaryText = if ($userSummary) {
+                "Repeated MFA denials detected for $userSummary. Enforce Microsoft Authenticator number matching through Conditional Access authentication strength and retire simple approve/deny prompts."
+            }
+            else {
+                "Repeated MFA push denials detected. Enforce Microsoft Authenticator number matching through Conditional Access authentication strength and retire simple approve/deny prompts."
+            }
+
+            $bpCollection += [pscustomobject]@{
+                Title      = 'Enforce number matching for Microsoft Authenticator push'
+                Importance = 'High'
+                Audience   = 'Conditional Access owners / IAM'
+                Summary    = $summaryText
+                Evidence   = $evidenceText
             }
         }
     }
@@ -3595,6 +3679,7 @@ function New-MfaHtmlReport {
     $null = $sb.AppendLine('.cards { margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }')
     $null = $sb.AppendLine('.card { background: #fff; border-radius: 12px; padding: 18px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08); display: flex; flex-direction: column; gap: 10px; }')
     $null = $sb.AppendLine('.card .title { font-size: 1.05rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }')
+    $null = $sb.AppendLine('.card.best-card { border-left: 4px solid #2563eb; }')
     $null = $sb.AppendLine('.chip { padding: 2px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: #fff; }')
     $null = $sb.AppendLine('.info { font-size: 0.9rem; color: #4b5563; }')
     $null = $sb.AppendLine('.target { font-size: 0.85rem; color: #2563eb; word-break: break-word; }')
@@ -3633,6 +3718,66 @@ function New-MfaHtmlReport {
         $null = $sb.AppendLine('</div></div>')
     }
     $null = $sb.AppendLine('</div>')
+
+    if ($bpCollection.Count -gt 0) {
+        $null = $sb.AppendLine("<h2>Best Practice Highlights ({0})</h2>" -f $bpCollection.Count)
+        $null = $sb.AppendLine('<div class="cards">')
+        foreach ($note in $bpCollection) {
+            if (-not $note) { continue }
+            $importance = if ($note.PSObject.Properties['Importance'] -and $note.Importance) { [string]$note.Importance } else { 'Informational' }
+            $class = & $severityClass $importance
+            $title = if ($note.PSObject.Properties['Title'] -and $note.Title) { [string]$note.Title } else { 'Best practice' }
+            $audience = if ($note.PSObject.Properties['Audience'] -and $note.Audience) { [string]$note.Audience } else { $null }
+            $summary = if ($note.PSObject.Properties['Summary'] -and $note.Summary) { [string]$note.Summary } else { $null }
+
+            $evidenceString = $null
+            if ($note.PSObject.Properties['Evidence']) {
+                $rawEvidence = $note.Evidence
+                if ($null -ne $rawEvidence) {
+                    if ($rawEvidence -is [System.Collections.IEnumerable] -and -not ($rawEvidence -is [string])) {
+                        $evidenceItems = @($rawEvidence | Where-Object { $_ }) | ForEach-Object { [string]$_ }
+                        if ($evidenceItems.Count -gt 0) {
+                            $evidenceString = $evidenceItems -join '; '
+                        }
+                    }
+                    else {
+                        $text = [string]$rawEvidence
+                        if ($text) {
+                            $evidenceString = $text
+                        }
+                    }
+                }
+            }
+
+            $actionItems = @()
+            if ($note.PSObject.Properties['Actions']) {
+                $rawActions = $note.Actions
+                if ($rawActions -is [System.Collections.IEnumerable] -and -not ($rawActions -is [string])) {
+                    $actionItems = @($rawActions | Where-Object { $_ }) | ForEach-Object { [string]$_ }
+                }
+                elseif ($rawActions) {
+                    $actionItems = @([string]$rawActions)
+                }
+            }
+
+            $null = $sb.AppendLine('<div class="card best-card">')
+            $null = $sb.AppendLine(('<div class="title"><span>{0}</span><span class="chip {1}">{2}</span></div>' -f (& $encode $title), $class, (& $encode $importance)))
+            if ($audience) {
+                $null = $sb.AppendLine(('<div class="info"><strong>Audience:</strong> {0}</div>' -f (& $encode $audience)))
+            }
+            if ($summary) {
+                $null = $sb.AppendLine(('<div class="info">{0}</div>' -f (& $encode $summary)))
+            }
+            if ($evidenceString) {
+                $null = $sb.AppendLine(('<div class="info"><strong>Evidence:</strong> {0}</div>' -f (& $encode $evidenceString)))
+            }
+            foreach ($action in $actionItems) {
+                $null = $sb.AppendLine(('<div class="info"><strong>Action:</strong> {0}</div>' -f (& $encode $action)))
+            }
+            $null = $sb.AppendLine('</div>')
+        }
+        $null = $sb.AppendLine('</div>')
+    }
 
     $null = $sb.AppendLine("<h2>Detections ({0})</h2>" -f $detCollection.Count)
     if ($detCollection.Count -gt 0) {
@@ -3772,6 +3917,8 @@ function New-MfaHtmlReport {
         Path            = $writtenPath
         DetectionCount  = $detCollection.Count
         PlaybookCount   = $playCollection.Count
+        BestPracticeCount = $bpCollection.Count
+        BestPractices   = @($bpCollection)
     }
 }
 
@@ -3810,6 +3957,8 @@ function Invoke-MfaScenarioReport {
     if ($rawScenario.PSObject.Properties['RoleAssignments']) {
         $roleAssignments = @($rawScenario.RoleAssignments) | Where-Object { $_ }
     }
+
+    $bestPracticeNotes = @()
 
     if (-not $OutputDirectory) {
         $moduleRoot = Split-Path -Parent $PSScriptRoot
@@ -3858,6 +4007,121 @@ function Invoke-MfaScenarioReport {
     $allDetections = @($allDetections | Where-Object { $_ })
     Write-Verbose ("Detections discovered: {0}" -f $allDetections.Count)
 
+    $formatIdentityList = {
+        param([System.Collections.IEnumerable] $Items)
+
+        $values = @()
+        foreach ($item in $Items) {
+            if ($null -ne $item -and $item -ne '') {
+                $values += [string]$item
+            }
+        }
+
+        if ($values.Count -eq 0) {
+            return ''
+        }
+
+        $unique = $values | Sort-Object -Unique
+        if ($unique.Count -le 3) {
+            return $unique -join ', '
+        }
+
+        return (($unique[0..2] -join ', ') + ', …')
+    }
+
+    if ($registrations.Count -gt 0) {
+        $nonAuthenticatorDefaults = @($registrations | Where-Object {
+            $_ -and $_.IsDefault -and ([string]$_.MethodType -ne 'microsoftAuthenticatorAuthenticationMethod')
+        })
+
+        if ($nonAuthenticatorDefaults.Count -gt 0) {
+            $affectedUsers = $nonAuthenticatorDefaults | ForEach-Object { $_.UserPrincipalName } | Where-Object { $_ } | Sort-Object -Unique
+            $userSummary = & $formatIdentityList $affectedUsers
+
+            $friendlyMethods = @{
+                'smsAuthenticationMethod'                = 'SMS'
+                'voiceAuthenticationMethod'              = 'Voice call'
+                'temporaryAccessPassAuthenticationMethod'= 'Temporary Access Pass'
+                'softwareOathAuthenticationMethod'       = 'Software OTP'
+                'emailAuthenticationMethod'              = 'Email OTP'
+                'fido2AuthenticationMethod'              = 'FIDO2 security key'
+                'passwordlessPhoneSignInMethod'          = 'Authenticator passwordless (legacy)'
+            }
+
+            $methodSummary = ($nonAuthenticatorDefaults | Group-Object -Property MethodType | ForEach-Object {
+                $type = if ($_.Name) { [string]$_.Name } else { 'Unknown' }
+                $label = if ($friendlyMethods.ContainsKey($type)) { $friendlyMethods[$type] } else { $type }
+                "{0} ({1})" -f $label, $_.Count
+            }) -join ', '
+
+            $privilegedUsers = @()
+            if ($roleAssignments.Count -gt 0) {
+                $privilegedUsers = $roleAssignments | ForEach-Object {
+                    if ($_.PSObject.Properties['UserPrincipalName']) { [string]$_.UserPrincipalName }
+                    elseif ($_.PSObject.Properties['PrincipalId']) { [string]$_.PrincipalId }
+                    else { $null }
+                } | Where-Object { $_ } | Sort-Object -Unique
+            }
+
+            $importance = 'High'
+            if ($privilegedUsers -and -not ($affectedUsers | Where-Object { $privilegedUsers -contains $_ })) {
+                $importance = 'Medium'
+            }
+
+            $summary = if ($userSummary) {
+                "Default MFA methods for $userSummary rely on weaker factors ($methodSummary). Shift these identities to Microsoft Authenticator with number matching enforced via Conditional Access authentication strength."
+            }
+            else {
+                "Default MFA methods rely on non-Authenticator factors ($methodSummary). Shift identities to Microsoft Authenticator with number matching enforced via Conditional Access authentication strength."
+            }
+
+            $bestPracticeNotes += [pscustomobject]@{
+                Title      = 'Promote Microsoft Authenticator number matching'
+                Importance = $importance
+                Audience   = 'IAM / Conditional Access'
+                Summary    = $summary
+                Evidence   = if ($methodSummary) { "Current defaults: $methodSummary" } else { $null }
+            }
+        }
+    }
+
+    $fatigueDetections = @($allDetections | Where-Object {
+        $_.PSObject.Properties['DetectionId'] -and $_.DetectionId -eq 'MFA-DET-004'
+    })
+    if ($fatigueDetections.Count -gt 0) {
+        $fatigueUsers = $fatigueDetections | ForEach-Object { $_.UserPrincipalName } | Where-Object { $_ } | Sort-Object -Unique
+        $userSummary = & $formatIdentityList $fatigueUsers
+
+        $evidenceStrings = @(
+            $fatigueDetections | ForEach-Object {
+                if ($_.PSObject.Properties['FailureReasons'] -and $_.FailureReasons) {
+                    $_.FailureReasons
+                }
+            }
+        ) | Where-Object { $_ }
+
+        $evidenceText = $null
+        if ($evidenceStrings) {
+            $flatEvidence = (($evidenceStrings -join ';') -split ';') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            if ($flatEvidence) {
+                $evidenceText = "Observed failure reasons: {0}" -f (($flatEvidence | Sort-Object -Unique) -join '; ')
+            }
+        }
+
+        $bestPracticeNotes += [pscustomobject]@{
+            Title      = 'Enforce number matching for Microsoft Authenticator push'
+            Importance = 'High'
+            Audience   = 'Conditional Access owners / IAM'
+            Summary    = if ($userSummary) {
+                "Repeated MFA denials were detected for $userSummary. Require Microsoft Authenticator number matching via Conditional Access authentication strength to neutralize push fatigue attacks."
+            }
+            else {
+                "Repeated MFA push denials were detected. Require Microsoft Authenticator number matching via Conditional Access authentication strength to neutralize push fatigue attacks."
+            }
+            Evidence   = $evidenceText
+        }
+    }
+
     Write-Progress -Activity 'Processing scenario' -Status 'Planning playbooks' -PercentComplete 50
 
     $playbookPlans = @()
@@ -3905,7 +4169,7 @@ function Invoke-MfaScenarioReport {
 
     $timestamp = (Get-Date).ToString('yyyyMMddTHHmmss')
     $htmlPath = Join-Path -Path $OutputDirectory -ChildPath ("scenario-report-{0}.html" -f $timestamp)
-    $report = New-MfaHtmlReport -Detections $allDetections -Playbooks $playbookOutputs -Path $htmlPath -OpenInBrowser:$OpenReport
+    $report = New-MfaHtmlReport -Detections $allDetections -Playbooks $playbookOutputs -BestPractices $bestPracticeNotes -Path $htmlPath -OpenInBrowser:$OpenReport
 
     Write-Verbose ("HTML report saved to: {0}" -f $report.Path)
 
@@ -3917,6 +4181,8 @@ function Invoke-MfaScenarioReport {
         TicketOutputs    = @($playbookOutputs | ForEach-Object { $_.TicketResult.Target })
         NotificationOutputs = @($playbookOutputs | ForEach-Object { $_.NotificationResult.Target })
         OutputDirectory  = $OutputDirectory
+        BestPracticeNotes = @($bestPracticeNotes)
+        BestPracticeCount = @($bestPracticeNotes).Count
     }
 
     if ($PassThru) {

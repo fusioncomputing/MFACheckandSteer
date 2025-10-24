@@ -17,6 +17,7 @@ Roadmap task **4.4** expands detection validation beyond unit tests by introduci
 | `INC-004` | Privileged Admin Without MFA | Privileged account lacks any registered MFA method, prompting enforcement playbook. | `MFA-DET-003` | Critical detection for privileged role without MFA. |
 | `INC-005` | MFA Failure Storm | Password spray triggers a burst of MFA denials, followed by monitoring sign-ins. | `MFA-DET-004`, Suspicious score (`RepeatedFailures`) | Medium-severity detection plus elevated score for repeated failures. |
 | `INC-006` | Impossible Travel Success | User signs in successfully from two continents within minutes using MFA. | `MFA-DET-005`, Suspicious score (`ImpossibleTravel`) | High-severity impossible travel detection and high score due to risk signals. |
+| `INC-007` | Privileged Admin Multi-Vector Probe | Coordinated campaign targets a privileged admin while generating noise across engineering and helpdesk accounts. | `MFA-DET-001`, `MFA-DET-002`, `MFA-DET-003`, `MFA-DET-004`, `MFA-DET-005`, Suspicious score (`ImpossibleTravel`, `UnusualDevice`, `RepeatedFailures`, `HighRiskFactorChange`) | Multi-detection scenario that stresses reporting and playbook orchestration. |
 
 > Additional scenarios (e.g., service accounts, token theft) can be layered on as new detections ship.
 

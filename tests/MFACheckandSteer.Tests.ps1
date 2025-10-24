@@ -693,6 +693,8 @@ Describe 'Invoke-MfaScenarioReport' {
             Test-Path -Path $result.HtmlReport | Should -BeTrue
             $result.TicketOutputs | Should -HaveCount 1
             $result.NotificationOutputs | Should -HaveCount 1
+            $result.PSObject.Properties.Name | Should -Contain 'BestPracticeNotes'
+            $result.BestPracticeCount | Should -Be (@($result.BestPracticeNotes).Count)
 
             Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 1 -Scope It -ParameterFilter {
                 $FilePath -eq $result.HtmlReport
@@ -725,6 +727,13 @@ Describe 'New-MfaHtmlReport' {
             $ticketPath = Join-Path -Path $TestDrive -ChildPath 'html-ticket.json'
             $notificationPath = Join-Path -Path $TestDrive -ChildPath 'html-notification.json'
             $reportPath = Join-Path -Path $TestDrive -ChildPath 'mfa-report.html'
+            $bestPractice = [pscustomobject]@{
+                Title      = 'Require number matching'
+                Importance = 'High'
+                Audience   = 'IAM'
+                Summary    = 'Use number matching with Microsoft Authenticator to reduce push fatigue.'
+                Evidence   = 'Target privileged identities first.'
+            }
 
             try {
                 [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
@@ -732,10 +741,12 @@ Describe 'New-MfaHtmlReport' {
 
                 Mock -CommandName Start-Process -ModuleName MFACheckandSteer
                 $summary = Invoke-MfaPlaybookOutputs -Playbook $playbook -TicketOutFile $ticketPath -NotificationOutFile $notificationPath -PassThru
-                $report = New-MfaHtmlReport -Detections $detections -Playbooks $summary -Path $reportPath
+                $report = New-MfaHtmlReport -Detections $detections -Playbooks $summary -BestPractices $bestPractice -Path $reportPath
 
                 $report.DetectionCount | Should -Be 1
                 $report.PlaybookCount | Should -Be 1
+                $report.BestPracticeCount | Should -Be 1
+                $report.BestPractices | Should -HaveCount 1
                 $report.Path | Should -Not -BeNullOrEmpty
                 Test-Path -Path $report.Path | Should -BeTrue
 
@@ -743,6 +754,8 @@ Describe 'New-MfaHtmlReport' {
                 $html | Should -Match 'MFA-DET-010'
                 $html | Should -Match 'MFA-PL-010'
                 $html | Should -Match 'htmluser@example.com'
+                $html | Should -Match 'Require number matching'
+                $html | Should -Match 'Use number matching with Microsoft Authenticator'
 
                 Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 0 -Scope It
             }
@@ -763,6 +776,8 @@ Describe 'New-MfaHtmlReport' {
                 $report = New-MfaHtmlReport -Detections @() -Playbooks @() -Path $reportPath -OpenInBrowser
                 $report.Path | Should -Be $reportPath
                 Test-Path -Path $reportPath | Should -BeTrue
+                $report.BestPracticeCount | Should -Be 0
+                $report.PSObject.Properties.Name | Should -Contain 'BestPractices'
 
                 Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 1 -Scope It -ParameterFilter {
                     $FilePath -eq $reportPath

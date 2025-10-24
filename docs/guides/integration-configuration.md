@@ -47,7 +47,7 @@ MFA Check & Steer ships opinionated defaults for downstream ticketing and notifi
 - Copy `config/integrations.json` and override the fields you need. Unspecified properties continue to inherit defaults.
 - You can add custom properties under `Ticketing` or `Notifications` for downstream automation; they are exposed on the objects returned by `Get-MfaIntegrationConfig` so advanced scripts can read them.
 - All nested objects are projected as `pscustomobject` instances, making property access easy in PowerShell (`(Get-MfaIntegrationConfig -Area Ticketing).Authorization.TokenEnvVar`).
-- After generating tickets/notifications, use `New-MfaHtmlReport` to produce a lightweight HTML summary that highlights detections and playbook actions for stakeholders.
+- After generating tickets/notifications, use `New-MfaHtmlReport` to produce a lightweight HTML summary that highlights detections, playbook actions, and best-practice callouts. Supply `-BestPractices` to add bespoke guidance (for example, “require Microsoft Authenticator number matching via Conditional Access”), and note that repeated push-fatigue detections automatically surface the same recommendation.
 - Provide the `-OpenInBrowser` switch when calling `New-MfaHtmlReport` if you want the generated report to launch in the default browser automatically (Windows uses `Start-Process`; failures fall back to console warnings).
 - `Invoke-MfaScenarioReport` offers a turnkey workflow that replays a scenario JSON, stores ticket/notification artifacts under a chosen directory, and emits an HTML report (pass `-OpenReport` to launch it immediately).
 
