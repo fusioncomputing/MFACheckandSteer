@@ -47,6 +47,7 @@
 - 6.4 Produce training materials (recorded demos, labs, tabletop scenarios) to onboard analysts and measure readiness.
 - 6.5 Establish feedback loops (issue templates, RFC process, stakeholder review cadence) so SecOps teams can request enhancements effectively.
 - 6.6 Run UX research checkpoints (interviews, usability tests), document accessibility expectations, and perform internal documentation peer reviews before publishing.
+- 6.7 Generate HTML-based summary reports that highlight detection results and playbook actions for quick analyst review (mirrors CLI output but adds visual cues for findings).
 
 ## Phase 7 - Hardening, Compliance, and Release
 - 7.1 Run end-to-end security reviews: static code analysis, dependency audits, credential hygiene validation, and threat modeling refresh.

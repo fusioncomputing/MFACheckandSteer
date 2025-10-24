@@ -3382,4 +3382,67 @@ function Send-MfaPlaybookNotification {
     }
 }
 
-Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification
+function Invoke-MfaPlaybookOutputs {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [psobject] $Playbook,
+
+        [string] $TicketOutFile,
+        [string] $NotificationOutFile,
+        [switch] $SkipTicket,
+        [switch] $SkipNotification,
+        [switch] $PassThru
+    )
+
+    begin {
+        $results = @()
+    }
+
+    process {
+        if (-not $Playbook) { return }
+
+        $ticketResult = $null
+        if (-not $SkipTicket) {
+            $ticketParams = @{
+                Playbook = $Playbook
+            }
+            if ($TicketOutFile) {
+                $ticketParams['OutFile'] = $TicketOutFile
+            }
+            $ticketResult = Submit-MfaPlaybookTicket @ticketParams
+        }
+
+        $notificationResult = $null
+        if (-not $SkipNotification) {
+            $notificationParams = @{
+                Playbook = $Playbook
+            }
+            if ($NotificationOutFile) {
+                $notificationParams['OutFile'] = $NotificationOutFile
+            }
+            $notificationResult = Send-MfaPlaybookNotification @notificationParams
+        }
+
+        $summary = [pscustomobject]@{
+            Playbook           = $Playbook
+            TicketResult       = $ticketResult
+            NotificationResult = $notificationResult
+        }
+
+        if ($PassThru) {
+            $results += $summary
+        }
+        else {
+            $summary
+        }
+    }
+
+    end {
+        if ($PassThru -and $results) {
+            return $results
+        }
+    }
+}
+
+Export-ModuleMember -Function Get-MfaEnvironmentStatus, Test-MfaGraphPrerequisite, Get-MfaEntraSignIn, Get-MfaEntraRegistration, Connect-MfaGraphDeviceCode, ConvertTo-MfaCanonicalSignIn, ConvertTo-MfaCanonicalRegistration, Invoke-MfaDetectionDormantMethod, Invoke-MfaDetectionHighRiskSignin, Invoke-MfaDetectionRepeatedMfaFailure, Invoke-MfaDetectionImpossibleTravelSuccess, Invoke-MfaDetectionPrivilegedRoleNoMfa, Invoke-MfaSuspiciousActivityScore, Get-MfaDetectionConfiguration, Get-MfaIntegrationConfig, Test-MfaPlaybookAuthorization, Invoke-MfaPlaybookResetDormantMethod, Invoke-MfaPlaybookEnforcePrivilegedRoleMfa, Invoke-MfaPlaybookContainHighRiskSignin, Invoke-MfaPlaybookContainRepeatedFailure, Invoke-MfaPlaybookInvestigateImpossibleTravel, Invoke-MfaPlaybookTriageSuspiciousScore, New-MfaTicketPayload, Submit-MfaPlaybookTicket, New-MfaNotificationPayload, Send-MfaPlaybookNotification, Invoke-MfaPlaybookOutputs

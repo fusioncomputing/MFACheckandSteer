@@ -66,6 +66,6 @@ MFA Check & Steer ships opinionated defaults for downstream ticketing and notifi
 - [ ] Decide which ticketing provider(s) to support and capture the required auth model.
 - [ ] Create or update `config/integrations.json` (or drop-in override) with provider names, endpoints, assignment groups, and env var references.
 - [ ] Populate the referenced environment variables in your automation host or CI runner.
-- [ ] Validate by running a representative playbook command with `-WhatIf` plus `Submit-MfaPlaybookTicket` / `Send-MfaPlaybookNotification` to inspect the generated payloads.
+- [ ] Validate by running a representative playbook command with `-WhatIf` plus `Invoke-MfaPlaybookOutputs` (or `Submit-MfaPlaybookTicket` / `Send-MfaPlaybookNotification`) to inspect the generated payloads.
 
 With this structure in place, analysts can iterate on downstream workflows without waiting on code changes or module releases.

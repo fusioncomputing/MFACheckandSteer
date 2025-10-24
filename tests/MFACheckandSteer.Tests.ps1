@@ -582,6 +582,70 @@ Describe 'Send-MfaPlaybookNotification' {
     }
 }
 
+Describe 'Invoke-MfaPlaybookOutputs' {
+    InModuleScope MFACheckandSteer {
+        It 'produces ticket and notification artifacts' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-001'
+                DetectionId       = 'MFA-DET-001'
+                UserPrincipalName = 'outputs@example.com'
+                Severity          = 'Medium'
+                ExecutedSteps     = @('Validate context')
+            }
+
+            $ticketPath = Join-Path -Path $TestDrive -ChildPath 'aggregate-ticket.json'
+            $notificationPath = Join-Path -Path $TestDrive -ChildPath 'aggregate-notification.json'
+
+            try {
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+
+                $result = Invoke-MfaPlaybookOutputs -Playbook $playbook -TicketOutFile $ticketPath -NotificationOutFile $notificationPath -PassThru
+                $result | Should -HaveCount 1
+                $summary = $result[0]
+
+                $summary.Playbook.PlaybookId | Should -Be 'MFA-PL-001'
+                $summary.TicketResult | Should -Not -BeNullOrEmpty
+                $summary.TicketResult.Target | Should -Be $ticketPath
+                $summary.NotificationResult | Should -Not -BeNullOrEmpty
+                $summary.NotificationResult.Target | Should -Be $notificationPath
+
+                Test-Path -Path $ticketPath | Should -BeTrue
+                Test-Path -Path $notificationPath | Should -BeTrue
+            }
+            finally {
+                Remove-Item -Path $ticketPath -ErrorAction SilentlyContinue
+                Remove-Item -Path $notificationPath -ErrorAction SilentlyContinue
+                [Environment]::SetEnvironmentVariable('MfaIntegrationConfigurationPath', $null, 'Process')
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+
+        It 'respects skip switches' {
+            $playbook = [pscustomobject]@{
+                PlaybookId        = 'MFA-PL-002'
+                DetectionId       = 'MFA-DET-002'
+                UserPrincipalName = 'skip@example.com'
+                Severity          = 'High'
+                ExecutedSteps     = @('Contain account')
+            }
+
+            $notificationPath = Join-Path -Path $TestDrive -ChildPath 'aggregate-notification-skip.json'
+
+            try {
+                $result = Invoke-MfaPlaybookOutputs -Playbook $playbook -SkipTicket -NotificationOutFile $notificationPath -PassThru
+                $summary = $result[0]
+                $summary.TicketResult | Should -BeNullOrEmpty
+                $summary.NotificationResult.Target | Should -Be $notificationPath
+            }
+            finally {
+                Remove-Item -Path $notificationPath -ErrorAction SilentlyContinue
+                Get-MfaIntegrationConfig -Refresh | Out-Null
+            }
+        }
+    }
+}
+
 if ($null -ne $script:OriginalPlaybookRoles) {
     [Environment]::SetEnvironmentVariable('MFA_PLAYBOOK_ROLES', $script:OriginalPlaybookRoles, 'Process')
 }

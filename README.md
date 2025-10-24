@@ -47,6 +47,7 @@ Continuous integration runs the same setup and Pester tests on Windows runners v
 - `Invoke-MfaPlaybookContainRepeatedFailure` - Apply playbook `MFA-PL-005` to contain MFA failure storms uncovered by `MFA-DET-004`.
 - `Invoke-MfaPlaybookInvestigateImpossibleTravel` - Apply playbook `MFA-PL-006` when `MFA-DET-005` flags suspicious impossible travel successes.
 - `Invoke-MfaPlaybookTriageSuspiciousScore` - Apply playbook `MFA-PL-004` to triage aggregated suspicious activity scores.
+- `Invoke-MfaPlaybookOutputs` - Run ticketing and notification helpers in one step (defaults to local file delivery when endpoints aren’t configured).
 - All detection and scoring outputs include `FrameworkTags`, `NistFunctions`, and `ReportingTags` to satisfy Phase 4.3 governance requirements (see `docs/detections/phase-4-framework-mapping.md`).
 
 ## Sample Data
