@@ -775,6 +775,64 @@ Describe 'Invoke-MfaTenantReport' {
             Assert-MockCalled Get-MfaEntraRegistration -ModuleName MFACheckandSteer -Times 1
             Assert-MockCalled Invoke-MfaScenarioReport -ModuleName MFACheckandSteer -Times 1
         }
+
+        It 'auto connects to Microsoft Graph when context is missing' {
+            $script:GraphContextCalls = 0
+            $script:ConnectCalled = $false
+
+            Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith {
+                $script:GraphContextCalls++
+                if ($script:GraphContextCalls -eq 1) {
+                    return $null
+                }
+                return @{
+                    TenantId          = '11111111-2222-3333-4444-555555555555'
+                    TenantDisplayName = 'Contoso Auto Tenant'
+                }
+            }
+
+            Mock -CommandName Connect-MfaGraphDeviceCode -ModuleName MFACheckandSteer -MockWith {
+                $script:ConnectCalled = $true
+            }
+
+            Mock -CommandName Get-MfaEntraSignIn -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    RecordType        = 'SignIn'
+                    UserPrincipalName = 'auto@example.com'
+                    CreatedDateTime   = '2025-10-30T12:00:00Z'
+                }
+            }
+
+            Mock -CommandName Get-MfaEntraRegistration -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    RecordType        = 'Registration'
+                    UserPrincipalName = 'auto@example.com'
+                    MethodType        = 'smsAuthenticationMethod'
+                    IsDefault         = $true
+                    LastUpdatedDateTime = '2025-05-01T00:00:00Z'
+                }
+            }
+
+            Mock -CommandName Invoke-MfaScenarioReport -ModuleName MFACheckandSteer -MockWith {
+                [pscustomobject]@{
+                    HtmlReport          = 'C:\reports\auto.html'
+                    DetectionCount      = 1
+                    PlaybookCount       = 1
+                    TicketOutputs       = @()
+                    NotificationOutputs = @()
+                    OutputDirectory     = 'C:\reports'
+                    BestPracticeNotes   = @()
+                    BestPracticeCount   = 0
+                    ReportContext       = $null
+                }
+            }
+
+            $result = Invoke-MfaTenantReport -LookbackHours 6 -PassThru
+
+            $result.HtmlReport | Should -Be 'C:\reports\auto.html'
+            $script:ConnectCalled | Should -BeTrue
+            Assert-MockCalled Connect-MfaGraphDeviceCode -ModuleName MFACheckandSteer -Times 1
+        }
     }
 }
 

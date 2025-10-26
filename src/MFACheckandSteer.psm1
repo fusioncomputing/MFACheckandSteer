@@ -5379,12 +5379,41 @@ function Invoke-MfaTenantReport {
         [string] $OutputDirectory,
         [switch] $SkipAuthorization,
         [switch] $OpenReport,
-        [switch] $PassThru
+        [switch] $PassThru,
+        [string[]] $GraphScopes,
+        [switch] $SkipAutoGraphConnect,
+        [switch] $SkipBetaProfile
     )
 
+    if (-not $GraphScopes -or $GraphScopes.Count -eq 0) {
+        $GraphScopes = @(
+            'AuditLog.Read.All',
+            'Policy.Read.All',
+            'Directory.Read.All',
+            'UserAuthenticationMethod.Read.All',
+            'IdentityRiskyUser.Read.All',
+            'RoleManagement.Read.Directory'
+        )
+    }
+
     $graphContext = Get-MfaGraphContext
+    if (-not $graphContext -and -not $SkipAutoGraphConnect) {
+        Write-Verbose "Microsoft Graph context not detected. Launching device code sign-in automatically."
+        try {
+            Connect-MfaGraphDeviceCode -Scopes $GraphScopes -SkipBetaProfile:$SkipBetaProfile.IsPresent | Out-Null
+        }
+        catch {
+            throw "Automatic Microsoft Graph connection failed: $_"
+        }
+        $graphContext = Get-MfaGraphContext
+    }
+
     if (-not $graphContext) {
-        throw "Microsoft Graph context not found. Run Connect-MgGraph or scripts/connect-device-login.ps1 before invoking Invoke-MfaTenantReport."
+        $message = "Microsoft Graph context not found. Run Connect-MgGraph or scripts/connect-device-login.ps1 before invoking Invoke-MfaTenantReport."
+        if (-not $SkipAutoGraphConnect) {
+            $message = "Microsoft Graph context could not be established automatically. Run Connect-MgGraph (or pass -SkipAutoGraphConnect to disable auto login) before invoking Invoke-MfaTenantReport."
+        }
+        throw $message
     }
 
     $effectiveReferenceTime = if ($ReferenceTime) { $ReferenceTime } else { Get-Date }
