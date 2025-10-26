@@ -695,6 +695,7 @@ Describe 'Invoke-MfaScenarioReport' {
             $result.NotificationOutputs | Should -HaveCount 1
             $result.PSObject.Properties.Name | Should -Contain 'BestPracticeNotes'
             $result.BestPracticeCount | Should -Be (@($result.BestPracticeNotes).Count)
+            $result.ReportContext | Should -Not -BeNullOrEmpty
 
             Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 1 -Scope It -ParameterFilter {
                 $FilePath -eq $result.HtmlReport
@@ -707,6 +708,7 @@ Describe 'Invoke-MfaTenantReport' {
     InModuleScope MFACheckandSteer {
         It 'collects live data and delegates to scenario report' {
             $script:CapturedScenario = $null
+            $script:CapturedReportContext = $null
 
             Mock -CommandName Get-MfaGraphContext -ModuleName MFACheckandSteer -MockWith {
                 @{ TenantId = '00000000-0000-0000-0000-000000000000' }
@@ -737,9 +739,11 @@ Describe 'Invoke-MfaTenantReport' {
                     $OutputDirectory,
                     $SkipAuthorization,
                     $OpenReport,
+                    $ReportContext,
                     $PassThru
                 )
                 $script:CapturedScenario = $Scenario
+                $script:CapturedReportContext = $ReportContext
                 [pscustomobject]@{
                     ScenarioPath        = $null
                     DetectionCount      = 2
@@ -760,9 +764,12 @@ Describe 'Invoke-MfaTenantReport' {
             $result.SignInCount | Should -Be 1
             $result.RegistrationCount | Should -Be 1
             $result.RoleAssignmentCount | Should -Be 0
+            $result.ReportContext | Should -Not -BeNullOrEmpty
+            $result.ReportContext.TenantName | Should -Be 'Microsoft Entra Tenant'
 
             $script:CapturedScenario | Should -Not -BeNullOrEmpty
             @($script:CapturedScenario.SignIns).Count | Should -BeGreaterThan 0
+            $script:CapturedReportContext | Should -Not -BeNullOrEmpty
 
             Assert-MockCalled Get-MfaEntraSignIn -ModuleName MFACheckandSteer -Times 1
             Assert-MockCalled Get-MfaEntraRegistration -ModuleName MFACheckandSteer -Times 1
@@ -824,6 +831,8 @@ Describe 'New-MfaHtmlReport' {
                 $html | Should -Match 'htmluser@example.com'
                 $html | Should -Match 'Require number matching'
                 $html | Should -Match 'Use number matching with Microsoft Authenticator'
+                $html | Should -Match 'filter-panel'
+                $html | Should -Match 'playbook-tiles'
 
                 Assert-MockCalled Start-Process -ModuleName MFACheckandSteer -Times 0 -Scope It
             }

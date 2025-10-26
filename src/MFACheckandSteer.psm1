@@ -3578,6 +3578,7 @@ function New-MfaHtmlReport {
         [psobject[]] $Detections,
         [psobject[]] $Playbooks,
         [psobject[]] $BestPractices,
+        [psobject] $Context,
         [string] $Path,
         [switch] $OpenInBrowser
     )
@@ -3587,6 +3588,201 @@ function New-MfaHtmlReport {
         param($value)
         if ($null -eq $value) { return '' }
         return [System.Net.WebUtility]::HtmlEncode([string]$value)
+    }
+
+    $reportContext = [ordered]@{}
+    if ($Context) {
+        if ($Context -is [System.Collections.IDictionary]) {
+            foreach ($key in $Context.Keys) {
+                $reportContext[$key] = $Context[$key]
+            }
+        }
+        else {
+            foreach ($prop in $Context.PSObject.Properties) {
+                $reportContext[$prop.Name] = $prop.Value
+            }
+        }
+    }
+
+    $getContextValue = {
+        param([string] $Name)
+        if ($reportContext.Contains($Name)) {
+            return $reportContext[$Name]
+        }
+        return $null
+    }
+
+    $toDateTime = {
+        param($value)
+
+        if ($null -eq $value -or $value -eq '') { return $null }
+        if ($value -is [datetime]) { return $value.ToUniversalTime() }
+
+        try {
+            return [datetime]::Parse(
+                [string]$value,
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AssumeUniversal
+            ).ToUniversalTime()
+        }
+        catch {
+            try { return ([datetime]$value).ToUniversalTime() }
+            catch { return $null }
+        }
+    }
+
+    $resolveColor = {
+        param($value, [string] $fallback)
+        if ($null -eq $value) { return $fallback }
+        $text = [string]$value
+        if ($text -match '^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|rgb\(|rgba\(|hsl\(|hsla\()') {
+            return $text
+        }
+        return $fallback
+    }
+
+    $getDetectionTimestamp = {
+        param($det)
+
+        if (-not $det) { return $null }
+
+        foreach ($name in @('DetectedOn','CreatedDateTime','OccurredDateTime','LastUpdatedDateTime','ReferenceTime','Timestamp')) {
+            if ($det.PSObject.Properties[$name] -and $det.$name) {
+                $ts = & $toDateTime $det.$name
+                if ($ts) { return $ts }
+            }
+        }
+
+        if ($det.PSObject.Properties['Indicators']) {
+            foreach ($indicator in @($det.Indicators)) {
+                if (-not $indicator) { continue }
+                foreach ($name in @('ObservedDateTime','CreatedDateTime')) {
+                    if ($indicator.PSObject.Properties[$name] -and $indicator.$name) {
+                        $ts = & $toDateTime $indicator.$name
+                        if ($ts) { return $ts }
+                    }
+                }
+            }
+        }
+
+        return $null
+    }
+
+    $detectionDetails = {
+        param($Detection)
+
+        if (-not $Detection) { return '' }
+
+        $sentences = @()
+
+        foreach ($prop in @('Summary','Description','Detail','Message','Notes')) {
+            if ($Detection.PSObject.Properties[$prop] -and $Detection.$prop) {
+                $sentences += [string]$Detection.$prop
+                break
+            }
+        }
+
+        $subject = $null
+        if ($Detection.PSObject.Properties['UserPrincipalName'] -and $Detection.UserPrincipalName) {
+            $subject = [string]$Detection.UserPrincipalName
+        }
+        elseif ($Detection.PSObject.Properties['UserDisplayName'] -and $Detection.UserDisplayName) {
+            $subject = [string]$Detection.UserDisplayName
+        }
+
+        if (-not $sentences) {
+            $label = $null
+            foreach ($name in @('DetectionName','Title','DetectionId','RecordType','Source')) {
+                if ($Detection.PSObject.Properties[$name] -and $Detection.$name) {
+                    $label = [string]$Detection.$name
+                    break
+                }
+            }
+            if (-not $label) { $label = 'Detection signal' }
+            $severity = if ($Detection.PSObject.Properties['Severity'] -and $Detection.Severity) { [string]$Detection.Severity } else { 'Informational' }
+            $target = if ($subject) { $subject } else { 'subject' }
+            $sentences += ("{0} for {1} ({2})" -f $label, $target, $severity)
+        }
+
+        if ($Detection.PSObject.Properties['AuthenticationRequirement'] -and $Detection.AuthenticationRequirement) {
+            $authRequirement = [string]$Detection.AuthenticationRequirement
+            $policyNames = @()
+            if ($Detection.PSObject.Properties['AuthenticationRequirementPolicies'] -and $Detection.AuthenticationRequirementPolicies) {
+                $policyNames = @($Detection.AuthenticationRequirementPolicies | Where-Object { $_ })
+            }
+            if ($policyNames.Count -gt 0) {
+                $sentences += ("Requirement {0} enforced by {1}" -f $authRequirement, ($policyNames -join ', '))
+            }
+            else {
+                $sentences += ("Requirement {0}" -f $authRequirement)
+            }
+        }
+
+        $methodNames = @()
+        if ($Detection.PSObject.Properties['AuthenticationDetails'] -and $Detection.AuthenticationDetails) {
+            foreach ($detail in @($Detection.AuthenticationDetails)) {
+                if (-not $detail) { continue }
+                if ($detail.PSObject.Properties['AuthenticationMethod'] -and $detail.AuthenticationMethod) {
+                    $methodNames += [string]$detail.AuthenticationMethod
+                }
+                elseif ($detail -is [string]) {
+                    $methodNames += [string]$detail
+                }
+            }
+        }
+        if ($Detection.PSObject.Properties['AuthenticationMethods'] -and $Detection.AuthenticationMethods) {
+            $methodNames += @($Detection.AuthenticationMethods | Where-Object { $_ })
+        }
+        $methodNames = @($methodNames | Where-Object { $_ }) | Sort-Object -Unique
+        if ($methodNames.Count -gt 0) {
+            $sentences += ("Methods observed: {0}" -f ($methodNames -join ', '))
+        }
+
+        $resourceNames = @()
+        foreach ($field in @('ResourceDisplayName','AppDisplayName')) {
+            if ($Detection.PSObject.Properties[$field] -and $Detection.$field) {
+                $resourceNames += [string]$Detection.$field
+            }
+        }
+        $resourceNames = @($resourceNames | Where-Object { $_ }) | Sort-Object -Unique
+        if ($resourceNames.Count -gt 0) {
+            $sentences += ("Target resource: {0}" -f ($resourceNames -join ', '))
+        }
+
+        if ($Detection.PSObject.Properties['ClientAppUsed'] -and $Detection.ClientAppUsed) {
+            $sentences += ("Client app: {0}" -f $Detection.ClientAppUsed)
+        }
+
+        if ($Detection.PSObject.Properties['Result'] -and $Detection.Result) {
+            $resultDetail = [string]$Detection.Result
+            foreach ($detailField in @('ResultFailureReason','ResultAdditionalDetails')) {
+                if ($Detection.PSObject.Properties[$detailField] -and $Detection.$detailField) {
+                    $resultDetail = ("{0} ({1})" -f $resultDetail, $Detection.$detailField)
+                    break
+                }
+            }
+            $sentences += ("Result: {0}" -f $resultDetail)
+        }
+
+        $eventTime = & $getDetectionTimestamp $Detection
+        if ($eventTime) {
+            $sentences += ("Observed {0} UTC" -f $eventTime.ToUniversalTime().ToString('yyyy-MM-dd HH:mm'))
+        }
+
+        $normalized = @()
+        foreach ($segment in $sentences) {
+            if (-not $segment) { continue }
+            $text = $segment.Trim()
+            if (-not $text) { continue }
+            if ($text.EndsWith('.')) {
+                $normalized += $text
+            }
+            else {
+                $normalized += ($text + '.')
+            }
+        }
+
+        return ($normalized -join ' ').Trim()
     }
 
     $detCollection = @()
@@ -3654,6 +3850,37 @@ function New-MfaHtmlReport {
         'MFA-DET-004' = @('MFA-PL-005')
         'MFA-DET-005' = @('MFA-PL-006')
         'MFA-SCORE'   = @('MFA-PL-004')
+    }
+
+    $playbookSummary = {
+        param(
+            [string[]] $Identifiers,
+            [hashtable] $FriendlyNames
+        )
+
+        if (-not $Identifiers) { return $null }
+
+        $labels = @()
+        foreach ($identifier in @($Identifiers | Where-Object { $_ })) {
+            $id = [string]$identifier
+            $label = $id
+            if ($FriendlyNames -and $FriendlyNames.ContainsKey($id)) {
+                $label = ("{0} ({1})" -f $FriendlyNames[$id], $id)
+            }
+            $labels += $label
+        }
+
+        $labels = @($labels | Where-Object { $_ }) | Sort-Object -Unique
+        if ($labels.Count -eq 0) { return $null }
+        if ($labels.Count -eq 1) {
+            return ("Recommended remediation: {0}." -f $labels[0])
+        }
+        if ($labels.Count -eq 2) {
+            return ("Recommended remediation: {0} and {1}." -f $labels[0], $labels[1])
+        }
+
+        $initial = $labels[0..($labels.Count - 2)] -join ', '
+        return ("Recommended remediation: {0}, and {1}." -f $initial, $labels[-1])
     }
 
     $playbookLookup = @{}
@@ -3756,9 +3983,101 @@ function New-MfaHtmlReport {
                 Audience   = 'Conditional Access owners / IAM'
                 Summary    = $summaryText
                 Evidence   = $evidenceText
+                Actions    = @(
+                    'Require number matching inside the privileged-access MFA policy',
+                    'Notify impacted admins about active push-fatigue attempts'
+                )
+                GovernanceReferences = @(
+                    'MFA-CFG-008 - Push Fatigue Hardening',
+                    'MFA-PL-005 - Contain Repeated MFA Failures'
+                )
             }
         }
     }
+
+    $canonicalSeverity = {
+        param([string] $value)
+        $text = if ($value) { [string]$value } else { '' }
+        switch ($text.ToLowerInvariant()) {
+            'critical' { 'Critical' }
+            'high'     { 'High' }
+            'medium'   { 'Medium' }
+            'low'      { 'Low' }
+            default    { 'Informational' }
+        }
+    }
+
+    $detectionTimestamps = @()
+    foreach ($det in $detCollection) {
+        $ts = & $getDetectionTimestamp $det
+        if ($ts) { $detectionTimestamps += $ts }
+    }
+
+    $contextStart = & $toDateTime (& $getContextValue 'LookbackStart')
+    $contextEnd = & $toDateTime (& $getContextValue 'LookbackEnd')
+    $contextReference = & $toDateTime (& $getContextValue 'ReferenceTime')
+
+    if (-not $contextEnd -and $contextReference) {
+        $contextEnd = $contextReference
+    }
+    if (-not $contextStart -and $detectionTimestamps.Count -gt 0) {
+        $contextStart = ($detectionTimestamps | Sort-Object)[0]
+    }
+    if (-not $contextEnd -and $detectionTimestamps.Count -gt 0) {
+        $contextEnd = ($detectionTimestamps | Sort-Object)[-1]
+    }
+    if (-not $contextStart -and $contextEnd) {
+        $contextStart = $contextEnd.AddHours(-24)
+    }
+    if (-not $contextEnd -and $contextStart) {
+        $contextEnd = $contextStart.AddHours(24)
+    }
+    if (-not $contextStart) { $contextStart = (Get-Date).AddHours(-24) }
+    if (-not $contextEnd) { $contextEnd = Get-Date }
+    if ($contextStart -gt $contextEnd) {
+        $temp = $contextStart
+        $contextStart = $contextEnd
+        $contextEnd = $temp
+    }
+
+    $lookbackWindow = $contextEnd - $contextStart
+    $lookbackHours = if ($lookbackWindow.TotalHours -gt 0) { [math]::Round($lookbackWindow.TotalHours, 1) } else { 0 }
+
+    $reportContext['LookbackStart'] = $contextStart
+    $reportContext['LookbackEnd'] = $contextEnd
+    $reportContext['ReferenceTime'] = if ($contextReference) { $contextReference } else { $contextEnd }
+    $reportContext['LookbackWindowHours'] = $lookbackHours
+
+    $tenantName = & $getContextValue 'TenantName'
+    if (-not $tenantName) { $tenantName = 'Tenant not specified' }
+    $tenantId = & $getContextValue 'TenantId'
+    $scenarioName = & $getContextValue 'ScenarioName'
+    if (-not $scenarioName) { $scenarioName = 'Operational Snapshot' }
+    $scenarioId = & $getContextValue 'ScenarioId'
+    $scenarioDescription = & $getContextValue 'ScenarioDescription'
+    if ($scenarioDescription -and $scenarioDescription.Length -gt 180) {
+        $scenarioDescription = $scenarioDescription.Substring(0, 177) + '...'
+    }
+
+    $windowRangeText = ("{0} – {1}" -f
+        $contextStart.ToUniversalTime().ToString('yyyy-MM-dd HH:mm'),
+        $contextEnd.ToUniversalTime().ToString('yyyy-MM-dd HH:mm'))
+    $windowRangeText = "$windowRangeText UTC"
+    $windowSummaryText = if ($lookbackHours -gt 0) {
+        "{0} hour window" -f $lookbackHours
+    }
+    else {
+        'Window duration < 1 hour'
+    }
+
+    $uniqueUsers = @($detCollection | ForEach-Object { $_.UserPrincipalName } | Where-Object { $_ }) | Sort-Object -Unique
+    $impactUserCount = $uniqueUsers.Count
+    $uniqueControlOwners = @($detCollection | ForEach-Object { $_.ControlOwner } | Where-Object { $_ }) | Sort-Object -Unique
+    $bestPracticeCount = $bpCollection.Count
+    $bestPracticeSubtext = if ($bestPracticeCount -gt 0) { 'Best-practice callouts ready' } else { 'No new callouts this run' }
+
+    $brandPrimary = & $resolveColor (& $getContextValue 'BrandPrimaryColor') '#2563eb'
+    $brandAccent = & $resolveColor (& $getContextValue 'BrandAccentColor') '#0ea5e9'
 
     $severityOrder = @('Critical', 'High', 'Medium', 'Low', 'Informational')
     $severityClass = {
@@ -3775,7 +4094,8 @@ function New-MfaHtmlReport {
     $detSeverityCounts = [ordered]@{}
     foreach ($sev in $severityOrder) { $detSeverityCounts[$sev] = 0 }
     foreach ($det in $detCollection) {
-        $sev = if ($det.PSObject.Properties['Severity'] -and $det.Severity) { [string]$det.Severity } else { 'Informational' }
+        $rawSeverity = if ($det.PSObject.Properties['Severity'] -and $det.Severity) { [string]$det.Severity } else { 'Informational' }
+        $sev = & $canonicalSeverity $rawSeverity
         if (-not $detSeverityCounts.Contains($sev)) { $detSeverityCounts[$sev] = 0 }
         $detSeverityCounts[$sev]++
     }
@@ -3784,16 +4104,308 @@ function New-MfaHtmlReport {
     foreach ($sev in $severityOrder) { $playSeverityCounts[$sev] = 0 }
     foreach ($entry in $playCollection) {
         $play = $entry.Playbook
-        $sev = if ($play -and $play.PSObject.Properties['Severity'] -and $play.Severity) { [string]$play.Severity } else { 'Informational' }
+        $rawPlaySeverity = if ($play -and $play.PSObject.Properties['Severity'] -and $play.Severity) { [string]$play.Severity } else { 'Informational' }
+        $sev = & $canonicalSeverity $rawPlaySeverity
         if (-not $playSeverityCounts.Contains($sev)) { $playSeverityCounts[$sev] = 0 }
         $playSeverityCounts[$sev]++
     }
+
+    $bucketCount = 6
+    $bucketSeconds = if ($bucketCount -gt 0) { [math]::Max(1, $lookbackWindow.TotalSeconds / $bucketCount) } else { 1 }
+    $bucketLabels = @()
+    for ($i = 0; $i -lt $bucketCount; $i++) {
+        $bucketStart = $contextStart.AddSeconds($bucketSeconds * $i)
+        $bucketEnd = if ($i -eq $bucketCount - 1) { $contextEnd } else { $contextStart.AddSeconds($bucketSeconds * ($i + 1)) }
+        $bucketLabels += ("{0} – {1}" -f
+            $bucketStart.ToUniversalTime().ToString('MM-dd HH:mm'),
+            $bucketEnd.ToUniversalTime().ToString('MM-dd HH:mm'))
+    }
+
+    $severitySparkSeries = @{}
+    foreach ($sev in $severityOrder) {
+        $severitySparkSeries[$sev] = @(for ($i = 0; $i -lt $bucketCount; $i++) { 0 })
+    }
+
+    $totalWindowSeconds = [math]::Max(1, $lookbackWindow.TotalSeconds)
+    foreach ($det in $detCollection) {
+        $rawSeverity = if ($det.PSObject.Properties['Severity'] -and $det.Severity) { [string]$det.Severity } else { 'Informational' }
+        $sev = & $canonicalSeverity $rawSeverity
+        if (-not $severitySparkSeries.ContainsKey($sev)) {
+            $severitySparkSeries[$sev] = @(for ($i = 0; $i -lt $bucketCount; $i++) { 0 })
+        }
+
+        $ts = & $getDetectionTimestamp $det
+        if (-not $ts) { $ts = $contextEnd }
+        $relativeSeconds = ($ts - $contextStart).TotalSeconds
+        if ($relativeSeconds -lt 0) {
+            $bucketIndex = 0
+        }
+        elseif ($relativeSeconds -ge $totalWindowSeconds) {
+            $bucketIndex = $bucketCount - 1
+        }
+        else {
+            $bucketIndex = [int][math]::Min($bucketCount - 1, [math]::Floor($relativeSeconds / $bucketSeconds))
+        }
+
+        if ($bucketIndex -lt 0) { $bucketIndex = 0 }
+        $severitySparkSeries[$sev][$bucketIndex]++
+    }
+
+    $severityContributors = @{}
+    foreach ($sev in $severityOrder) { $severityContributors[$sev] = @{} }
 
     $totalDetections = $detCollection.Count
     $totalPlaybooks = $playCollection.Count
     Write-Verbose ("Detections included: {0}; Playbooks included: {1}" -f $totalDetections, $totalPlaybooks)
     $detScale = if ($totalDetections -gt 0) { [double]$totalDetections } else { 1 }
     $playScale = if ($totalPlaybooks -gt 0) { [double]$totalPlaybooks } else { 1 }
+
+    $topSeverityLabel = $null
+    $topSeverityValue = 0
+    foreach ($entry in $detSeverityCounts.GetEnumerator()) {
+        if ($entry.Value -gt $topSeverityValue) {
+            $topSeverityValue = $entry.Value
+            $topSeverityLabel = $entry.Key
+        }
+    }
+    $severityPluralSuffix = if ($topSeverityValue -eq 1) { '' } else { 's' }
+    $severityCallout = if ($topSeverityValue -gt 0) {
+        ("Highest volume: {0} ({1} detection{2})" -f $topSeverityLabel, $topSeverityValue, $severityPluralSuffix)
+    }
+    else {
+        'No detections recorded in this window.'
+    }
+
+    $preparedDetections = @()
+    $detectionRowIndex = 0
+    foreach ($det in $detCollection) {
+        $detectionRowIndex++
+        $rowId = "det-row-{0}" -f $detectionRowIndex
+        $drawerId = "det-evidence-{0}" -f $detectionRowIndex
+
+        $rawSeverity = if ($det.PSObject.Properties['Severity'] -and $det.Severity) { [string]$det.Severity } else { 'Informational' }
+        $canonSeverity = & $canonicalSeverity $rawSeverity
+        $severityClassName = & $severityClass $canonSeverity
+
+        $detectionId = ''
+        if ($det.PSObject.Properties['DetectionId'] -and $det.DetectionId) {
+            $detectionId = [string]$det.DetectionId
+        }
+        elseif ($det.PSObject.Properties['SignalId'] -and $det.SignalId) {
+            $detectionId = [string]$det.SignalId
+        }
+        elseif ($det.PSObject.Properties['Source'] -and $det.Source) {
+            $detectionId = [string]$det.Source
+        }
+        elseif ($det.PSObject.Properties['RecordType'] -and $det.RecordType) {
+            $detectionId = [string]$det.RecordType
+        }
+
+        $user = if ($det.PSObject.Properties['UserPrincipalName']) { [string]$det.UserPrincipalName } else { '' }
+        $controlOwner = if ($det.PSObject.Properties['ControlOwner']) { [string]$det.ControlOwner } else { '' }
+        $sla = if ($det.PSObject.Properties['ResponseSlaHours']) { [string]$det.ResponseSlaHours } else { '' }
+
+        $detailText = & $detectionDetails $det
+        if (-not $detailText) {
+            $detailText = 'Additional context not supplied.'
+        }
+
+        $detKeys = @()
+        if ($det.PSObject.Properties['DetectionId'] -and $det.DetectionId) { $detKeys += [string]$det.DetectionId }
+        if ($det.PSObject.Properties['SignalId'] -and $det.SignalId) { $detKeys += [string]$det.SignalId }
+        if ($detectionId) { $detKeys += [string]$detectionId }
+        $detKeys = @($detKeys | Where-Object { $_ }) | Sort-Object -Unique
+
+        $playbookIds = @()
+        foreach ($key in $detKeys) {
+            if ($playbookLookup.ContainsKey($key)) {
+                foreach ($play in $playbookLookup[$key]) {
+                    if ($play -and $play.PSObject.Properties['PlaybookId'] -and $play.PlaybookId) {
+                        $playbookIds += [string]$play.PlaybookId
+                    }
+                }
+            }
+        }
+        if ($playbookIds.Count -eq 0) {
+            foreach ($key in $detKeys) {
+                if ($defaultPlaybookRecommendations.ContainsKey($key)) {
+                    $playbookIds += $defaultPlaybookRecommendations[$key]
+                }
+            }
+        }
+        $playbookIds = @($playbookIds | Where-Object { $_ }) | Sort-Object -Unique
+        $remediationText = $null
+        if ($playbookIds.Count -gt 0) {
+            $remediationText = & $playbookSummary $playbookIds $playbookFriendlyNames
+        }
+
+        if ($remediationText) {
+            if ($detailText -and ($detailText.Trim().EndsWith('.') -eq $false)) {
+                $detailText = $detailText.Trim() + '.'
+            }
+            $detailText = ($detailText.Trim() + ' ' + $remediationText).Trim()
+        }
+
+        $badgeObjects = foreach ($id in $playbookIds) {
+            $label = if ($playbookFriendlyNames.ContainsKey($id)) { $playbookFriendlyNames[$id] } else { $id }
+            [pscustomobject]@{
+                Id    = $id
+                Label = $label
+            }
+        }
+
+        $evidenceEntries = @()
+        if ($det.PSObject.Properties['RiskState'] -and $det.RiskState) {
+            $evidenceEntries += ("Risk state: {0}" -f $det.RiskState)
+        }
+        if ($det.PSObject.Properties['RiskDetail'] -and $det.RiskDetail) {
+            $evidenceEntries += ("Risk detail: {0}" -f $det.RiskDetail)
+        }
+        if ($det.PSObject.Properties['FailureReasons'] -and $det.FailureReasons) {
+            $failureValues = (($det.FailureReasons -join ';') -split ';') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            if ($failureValues) {
+                $evidenceEntries += ("Failure reasons: {0}" -f ((@($failureValues | Sort-Object -Unique)) -join ', '))
+            }
+        }
+        if ($det.PSObject.Properties['Indicators'] -and $det.Indicators) {
+            $indicatorTypes = @()
+            foreach ($indicator in @($det.Indicators)) {
+                if (-not $indicator) { continue }
+                if ($indicator.PSObject.Properties['Type'] -and $indicator.Type) {
+                    $indicatorTypes += [string]$indicator.Type
+                }
+                elseif ($indicator -is [string]) {
+                    $indicatorTypes += [string]$indicator
+                }
+            }
+            $indicatorTypes = @($indicatorTypes | Where-Object { $_ }) | Sort-Object -Unique
+            if ($indicatorTypes.Count -gt 0) {
+                $evidenceEntries += ("Indicators: {0}" -f ($indicatorTypes -join ', '))
+            }
+        }
+        if ($det.PSObject.Properties['AuthenticationMethods'] -and $det.AuthenticationMethods) {
+            $evidenceEntries += ("Authentication methods: {0}" -f $det.AuthenticationMethods)
+        }
+        $locationParts = @()
+        foreach ($field in @('LocationCity','LocationState','LocationCountryOrRegion')) {
+            if ($det.PSObject.Properties[$field] -and $det.$field) {
+                $locationParts += [string]$det.$field
+            }
+        }
+        $locationParts = @($locationParts | Where-Object { $_ })
+        if ($locationParts.Count -gt 0) {
+            $evidenceEntries += ("Location: {0}" -f ($locationParts -join ', '))
+        }
+        if ($det.PSObject.Properties['CorrelationId'] -and $det.CorrelationId) {
+            $evidenceEntries += ("Correlation ID: {0}" -f $det.CorrelationId)
+        }
+        if ($det.PSObject.Properties['MethodType'] -and $det.MethodType) {
+            $evidenceEntries += ("Method type: {0}" -f $det.MethodType)
+        }
+
+        $userKey = if ($user) { $user.ToLowerInvariant() } else { 'none' }
+        $ownerKey = if ($controlOwner) { $controlOwner.ToLowerInvariant() } else { 'none' }
+        $severityKey = $canonSeverity.ToLowerInvariant()
+
+        $contributorLabel = if ($detectionId -and $user) {
+            "{0} ({1})" -f $detectionId, $user
+        }
+        elseif ($detectionId) {
+            $detectionId
+        }
+        elseif ($user) {
+            $user
+        }
+        else {
+            "Signal {0}" -f $detectionRowIndex
+        }
+
+        if (-not $severityContributors.ContainsKey($canonSeverity)) {
+            $severityContributors[$canonSeverity] = @{}
+        }
+        if (-not $severityContributors[$canonSeverity].ContainsKey($contributorLabel)) {
+            $severityContributors[$canonSeverity][$contributorLabel] = [pscustomobject]@{
+                Count  = 0
+                Anchor = $rowId
+            }
+        }
+        $severityContributors[$canonSeverity][$contributorLabel].Count++
+
+        $preparedDetections += [pscustomobject]@{
+            RowId            = $rowId
+            DrawerId         = $drawerId
+            Severity         = $canonSeverity
+            SeverityClass    = $severityClassName
+            DetectionId      = $detectionId
+            User             = $user
+            ControlOwner     = $controlOwner
+            Sla              = $sla
+            DetailText       = $detailText
+            PlaybookBadges   = @($badgeObjects)
+            EvidenceItems    = @($evidenceEntries | Where-Object { $_ })
+            PlaybookText     = $remediationText
+            UserKey          = $userKey
+            OwnerKey         = $ownerKey
+            SeverityKey      = $severityKey
+            ContributorLabel = $contributorLabel
+        }
+    }
+
+    $resolveLinkTarget = {
+        param([string] $Target)
+
+        if (-not $Target -or $Target -eq 'Not sent') {
+            return $null
+        }
+
+        if ($Target -match '^[a-zA-Z][a-zA-Z0-9+.\-]*://') {
+            return [pscustomobject]@{
+                Href  = $Target
+                Label = $Target
+            }
+        }
+
+        try {
+            if ([System.IO.Path]::IsPathRooted($Target)) {
+                $uri = [System.Uri]::new($Target)
+                return [pscustomobject]@{
+                    Href  = $uri.AbsoluteUri
+                    Label = [System.IO.Path]::GetFileName($Target)
+                    Title = $Target
+                }
+            }
+        }
+        catch {
+            return $null
+        }
+
+        return [pscustomobject]@{
+            Href  = $Target
+            Label = $Target
+        }
+    }
+
+    $formatLinkHtml = {
+        param([string] $Target)
+
+        if (-not $Target -or $Target -eq 'Not sent') {
+            return '<span class="target-muted">Not sent</span>'
+        }
+
+        $resolved = & $resolveLinkTarget $Target
+        if (-not $resolved) {
+            return ('<span class="target-muted">{0}</span>' -f (& $encode $Target))
+        }
+
+        $label = if ($resolved.Label) { $resolved.Label } else { $Target }
+        $href = if ($resolved.Href) { $resolved.Href } else { $Target }
+        $title = if ($resolved.Title) { $resolved.Title } else { $label }
+
+        return ("<a class=""target-link"" href=""{0}"" title=""{1}"">{2}</a>" -f
+            (& $encode $href),
+            (& $encode $title),
+            (& $encode $label))
+    }
 
     Write-Progress -Activity 'Generating MFA HTML report' -Status 'Composing content' -PercentComplete 25
     $sb = [System.Text.StringBuilder]::new()
@@ -3803,50 +4415,125 @@ function New-MfaHtmlReport {
     $null = $sb.AppendLine('<meta charset="utf-8" />')
     $null = $sb.AppendLine('<title>MFA Check &amp; Steer Summary</title>')
     $null = $sb.AppendLine('<style>')
-    $null = $sb.AppendLine('body { font-family: Segoe UI, Arial, sans-serif; margin: 24px; color: #1f2933; background: #f4f7fb; }')
+    $null = $sb.AppendLine(":root { --brand-primary: $brandPrimary; --brand-accent: $brandAccent; }")
+    $null = $sb.AppendLine('body { font-family: "Segoe UI", Arial, sans-serif; margin: 24px; color: #0f172a; background: #f4f6fb; line-height: 1.5; }')
     $null = $sb.AppendLine('h1 { margin-bottom: 0.2em; }')
-    $null = $sb.AppendLine('h2 { margin-top: 1.6em; }')
-    $null = $sb.AppendLine('table { border-collapse: collapse; width: 100%; margin-top: 0.6em; }')
-    $null = $sb.AppendLine('th, td { border: 1px solid #d2d6dc; padding: 8px 10px; text-align: left; }')
-    $null = $sb.AppendLine('th { background-color: #e4ebf2; }')
-    $null = $sb.AppendLine('.sev-critical { background-color: #fee2e2; }')
-    $null = $sb.AppendLine('.sev-high { background-color: #fef3c7; }')
-    $null = $sb.AppendLine('.sev-medium { background-color: #e0f2fe; }')
-    $null = $sb.AppendLine('.sev-low { background-color: #ecfdf5; }')
-    $null = $sb.AppendLine('.sev-default { background-color: #e5e7eb; }')
-    $null = $sb.AppendLine('.meta { color: #52606d; font-size: 0.9em; margin-bottom: 1.4em; }')
-    $null = $sb.AppendLine('.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }')
-    $null = $sb.AppendLine('.summary-card { background: linear-gradient(135deg, #2563eb, #1e3a8a); color: #fff; padding: 18px; border-radius: 12px; box-shadow: 0 12px 24px rgba(37, 99, 235, 0.22); }')
-    $null = $sb.AppendLine('.summary-card.secondary { background: linear-gradient(135deg, #059669, #047857); box-shadow: 0 12px 24px rgba(5, 150, 105, 0.22); }')
-    $null = $sb.AppendLine('.summary-card h3 { margin: 0; font-weight: 600; font-size: 1rem; }')
-    $null = $sb.AppendLine('.summary-card .value { font-size: 2.6rem; margin-top: 8px; font-weight: 700; }')
-    $null = $sb.AppendLine('.summary-card .subtext { font-size: 0.85rem; opacity: 0.85; margin-top: 6px; }')
-    $null = $sb.AppendLine('.severity-board { background: #fff; border-radius: 12px; padding: 18px; box-shadow: 0 12px 22px rgba(15, 23, 42, 0.08); margin-top: 20px; }')
-    $null = $sb.AppendLine('.severity-board h3 { margin: 0 0 12px 0; font-size: 1.1rem; }')
-    $null = $sb.AppendLine('.meter { margin-bottom: 10px; }')
-    $null = $sb.AppendLine('.meter-label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 4px; }')
-    $null = $sb.AppendLine('.meter-bar { height: 10px; border-radius: 6px; overflow: hidden; background: #e5e7eb; }')
-    $null = $sb.AppendLine('.meter-fill { height: 10px; border-radius: 6px; transition: width 0.4s ease; }')
+    $null = $sb.AppendLine('h2 { margin-top: 1.8em; }')
+    $null = $sb.AppendLine('.meta { color: #64748b; font-size: 0.9em; margin-bottom: 1em; }')
+    $null = $sb.AppendLine('.hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; padding: 20px; border-radius: 16px; background: linear-gradient(120deg, var(--brand-primary), var(--brand-accent)); color: #fff; box-shadow: 0 20px 35px rgba(15, 23, 42, 0.25); }')
+    $null = $sb.AppendLine('.hero-card { display: flex; flex-direction: column; gap: 6px; }')
+    $null = $sb.AppendLine('.hero-label { text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.08em; opacity: 0.85; }')
+    $null = $sb.AppendLine('.hero-primary { font-size: 1.35rem; font-weight: 600; }')
+    $null = $sb.AppendLine('.hero-meta { font-size: 0.9rem; opacity: 0.9; }')
+    $null = $sb.AppendLine('.summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 24px 0; }')
+    $null = $sb.AppendLine('.summary-card { background: #fff; border-radius: 14px; padding: 18px; border: 1px solid #e2e8f0; box-shadow: 0 15px 28px rgba(15, 23, 42, 0.08); position: relative; }')
+    $null = $sb.AppendLine('.summary-card::after { content: attr(data-tooltip); position: absolute; left: 50%; bottom: 100%; transform: translate(-50%, -12px); background: #0f172a; color: #fff; padding: 6px 10px; border-radius: 6px; font-size: 0.75rem; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.2s ease; }')
+    $null = $sb.AppendLine('.summary-card:hover::after { opacity: 1; }')
+    $null = $sb.AppendLine('.summary-card h3 { margin: 0; font-weight: 600; font-size: 1rem; color: #0f172a; }')
+    $null = $sb.AppendLine('.summary-card .value { font-size: 2.5rem; margin: 6px 0; font-weight: 700; color: var(--brand-primary); }')
+    $null = $sb.AppendLine('.summary-card.secondary .value { color: var(--brand-accent); }')
+    $null = $sb.AppendLine('.summary-card .subtext { font-size: 0.85rem; color: #475569; }')
+    $null = $sb.AppendLine('.severity-board { background: #fff; border-radius: 16px; padding: 20px; border: 1px solid #e2e8f0; box-shadow: 0 18px 35px rgba(15, 23, 42, 0.08); margin-top: 24px; }')
+    $null = $sb.AppendLine('.callout { background: rgba(37, 99, 235, 0.08); border-left: 4px solid var(--brand-primary); padding: 10px 14px; border-radius: 8px; font-size: 0.9rem; color: #1d4ed8; margin: 12px 0; }')
+    $null = $sb.AppendLine('.meter { margin-bottom: 14px; }')
+    $null = $sb.AppendLine('.meter-label { display: flex; justify-content: space-between; font-size: 0.85rem; color: #475569; }')
+    $null = $sb.AppendLine('.meter-bar { height: 12px; border-radius: 999px; overflow: hidden; background: #e2e8f0; }')
+    $null = $sb.AppendLine('.meter-fill { height: 12px; border-radius: 999px; transition: width 0.4s ease; }')
+    $null = $sb.AppendLine('.sparkline { display: flex; gap: 4px; align-items: flex-end; margin-top: 6px; }')
+    $null = $sb.AppendLine('.sparkline span { flex: 1; min-height: 4px; background: var(--brand-primary); border-radius: 2px; opacity: 0.65; transition: opacity 0.2s; }')
+    $null = $sb.AppendLine('.sparkline span:hover { opacity: 1; }')
+    $null = $sb.AppendLine('.top-contributors { border-top: 1px solid #e2e8f0; padding-top: 12px; margin-top: 12px; }')
+    $null = $sb.AppendLine('.top-contributors ul { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }')
+    $null = $sb.AppendLine('.top-contributors a { color: var(--brand-primary); text-decoration: none; }')
+    $null = $sb.AppendLine('.top-contributors a:hover { text-decoration: underline; }')
+    $null = $sb.AppendLine('table { border-collapse: collapse; width: 100%; margin-top: 0.6em; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06); }')
+    $null = $sb.AppendLine('th, td { border: 1px solid #e2e8f0; padding: 10px 12px; text-align: left; }')
+    $null = $sb.AppendLine('th { background-color: #f8fafc; font-weight: 600; font-size: 0.9rem; color: #0f172a; }')
+    $null = $sb.AppendLine('.filter-panel { display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: center; margin-top: 18px; }')
+    $null = $sb.AppendLine('.filter-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }')
+    $null = $sb.AppendLine('.filter-label { font-size: 0.8rem; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.05em; }')
+    $null = $sb.AppendLine('.chip-filter { border: 1px solid #cbd5f5; background: #fff; border-radius: 999px; padding: 4px 12px; font-size: 0.85rem; cursor: pointer; color: #0f172a; transition: all 0.2s ease; }')
+    $null = $sb.AppendLine('.chip-filter.active { background: var(--brand-primary); color: #fff; border-color: var(--brand-primary); }')
+    $null = $sb.AppendLine('.chip-clear { border: none; background: none; color: #dc2626; font-weight: 600; cursor: pointer; }')
+    $null = $sb.AppendLine('.remediation-list { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }')
+    $null = $sb.AppendLine('.remediation-badge { background: rgba(37, 99, 235, 0.12); color: #1d4ed8; border-radius: 999px; padding: 2px 10px; font-size: 0.75rem; font-weight: 600; }')
+    $null = $sb.AppendLine('.drawer-toggle { margin-top: 8px; border: none; background: none; color: var(--brand-accent); font-weight: 600; cursor: pointer; padding: 0; }')
+    $null = $sb.AppendLine('.drawer { margin-top: 6px; padding: 10px 12px; background: #f8fafc; border-radius: 10px; border: 1px dashed #cbd5f5; }')
+    $null = $sb.AppendLine('.drawer.collapsed { display: none; }')
+    $null = $sb.AppendLine('.drawer ul { margin: 0; padding-left: 18px; }')
     $null = $sb.AppendLine('.cards { margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }')
-    $null = $sb.AppendLine('.card { background: #fff; border-radius: 12px; padding: 18px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08); display: flex; flex-direction: column; gap: 10px; }')
-    $null = $sb.AppendLine('.card .title { font-size: 1.05rem; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }')
-    $null = $sb.AppendLine('.card.best-card { border-left: 4px solid #2563eb; }')
+    $null = $sb.AppendLine('.card { background: #fff; border-radius: 12px; padding: 18px; box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08); display: flex; flex-direction: column; gap: 10px; border: 1px solid #e2e8f0; }')
+    $null = $sb.AppendLine('.card.best-card { border-left: 6px solid var(--brand-primary); }')
     $null = $sb.AppendLine('.chip { padding: 2px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: #fff; }')
-    $null = $sb.AppendLine('.info { font-size: 0.9rem; color: #4b5563; }')
-    $null = $sb.AppendLine('.target { font-size: 0.85rem; color: #2563eb; word-break: break-word; }')
+    $null = $sb.AppendLine('.chip.sev-critical { background: #dc2626; }')
+    $null = $sb.AppendLine('.chip.sev-high { background: #f97316; }')
+    $null = $sb.AppendLine('.chip.sev-medium { background: #facc15; color: #0f172a; }')
+    $null = $sb.AppendLine('.chip.sev-low { background: #22c55e; }')
+    $null = $sb.AppendLine('.chip.sev-default { background: #94a3b8; }')
+    $null = $sb.AppendLine('.info { font-size: 0.9rem; color: #475569; }')
+    $null = $sb.AppendLine('.target { font-size: 0.85rem; color: var(--brand-primary); word-break: break-word; }')
+    $null = $sb.AppendLine('.checklist { list-style: none; margin: 6px 0 0; padding: 0; }')
+    $null = $sb.AppendLine('.checklist li { display: flex; gap: 8px; align-items: flex-start; font-size: 0.9rem; color: #0f172a; }')
+    $null = $sb.AppendLine('.checklist li::before { content: "\2713"; color: var(--brand-accent); font-weight: 700; }')
+    $null = $sb.AppendLine('.governance { margin-top: 6px; font-size: 0.85rem; color: #475569; }')
+    $null = $sb.AppendLine('.governance span { display: inline-block; background: rgba(99, 102, 241, 0.12); color: #4c1d95; padding: 2px 8px; border-radius: 8px; margin-right: 6px; margin-top: 4px; }')
+    $null = $sb.AppendLine('.playbook-tiles { margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }')
+    $null = $sb.AppendLine('.playbook-tile { background: #fff; border-radius: 14px; padding: 18px; border: 1px solid #e2e8f0; box-shadow: 0 15px 28px rgba(15, 23, 42, 0.08); display: flex; flex-direction: column; gap: 10px; }')
+    $null = $sb.AppendLine('.playbook-head { display: flex; justify-content: space-between; align-items: center; }')
+    $null = $sb.AppendLine('.status-pill { padding: 4px 12px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; color: #fff; }')
+    $null = $sb.AppendLine('.status-success { background: #16a34a; }')
+    $null = $sb.AppendLine('.status-whatif { background: #f97316; }')
+    $null = $sb.AppendLine('.status-error { background: #dc2626; }')
+    $null = $sb.AppendLine('.playbook-meta { font-size: 0.9rem; color: #475569; }')
+    $null = $sb.AppendLine('.step-list { font-size: 0.85rem; color: #0f172a; display: flex; flex-direction: column; gap: 4px; }')
+    $null = $sb.AppendLine('.link-row { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.85rem; }')
+    $null = $sb.AppendLine('.target-link { color: var(--brand-accent); text-decoration: none; }')
+    $null = $sb.AppendLine('.target-link:hover { text-decoration: underline; }')
+    $null = $sb.AppendLine('.target-muted { color: #94a3b8; }')
+    $null = $sb.AppendLine('tr.sev-critical td { background-color: rgba(248, 113, 113, 0.12); }')
+    $null = $sb.AppendLine('tr.sev-high td { background-color: rgba(251, 191, 36, 0.15); }')
+    $null = $sb.AppendLine('tr.sev-medium td { background-color: rgba(125, 211, 252, 0.18); }')
+    $null = $sb.AppendLine('tr.sev-low td { background-color: rgba(52, 211, 153, 0.15); }')
+    $null = $sb.AppendLine('tr.sev-default td { background-color: rgba(226, 232, 240, 0.8); }')
     $null = $sb.AppendLine('</style>')
     $null = $sb.AppendLine('</head>')
     $null = $sb.AppendLine('<body>')
     $null = $sb.AppendLine('<h1>MFA Check &amp; Steer Summary</h1>')
     $null = $sb.AppendLine(("<div class=""meta"">Generated UTC: {0}</div>" -f (& $encode (Get-Date).ToUniversalTime().ToString('u'))))
+    $null = $sb.AppendLine('<div class="hero">')
+    $null = $sb.AppendLine(('<div class="hero-card"><div class="hero-label">Tenant</div><div class="hero-primary">{0}</div>' -f (& $encode $tenantName)))
+    if ($tenantId) {
+        $null = $sb.AppendLine(('<div class="hero-meta">Tenant ID: {0}</div>' -f (& $encode $tenantId)))
+    }
+    else {
+        $null = $sb.AppendLine('<div class="hero-meta">Tenant ID not supplied</div>')
+    }
+    $null = $sb.AppendLine('</div>')
+
+    $lookbackCard = "<div class=""hero-card""><div class=""hero-label"">Lookback Window</div><div class=""hero-primary"">{0}</div><div class=""hero-meta"">{1}</div></div>" -f (& $encode $windowSummaryText), (& $encode $windowRangeText)
+    $null = $sb.AppendLine($lookbackCard)
+
+    $scenarioMetaLines = @()
+    if ($scenarioDescription) { $scenarioMetaLines += (& $encode $scenarioDescription) }
+    if ($scenarioId) { $scenarioMetaLines += ("Scenario ID: {0}" -f (& $encode $scenarioId)) }
+    if ($scenarioMetaLines.Count -eq 0) { $scenarioMetaLines += 'No scenario notes supplied.' }
+    $null = $sb.AppendLine(('<div class="hero-card"><div class="hero-label">Scenario</div><div class="hero-primary">{0}</div>' -f (& $encode $scenarioName)))
+    foreach ($line in $scenarioMetaLines) {
+        $null = $sb.AppendLine(('<div class="hero-meta">{0}</div>' -f $line))
+    }
+    $null = $sb.AppendLine('</div>')
+    $null = $sb.AppendLine('</div>')
 
     $null = $sb.AppendLine('<div class="summary-grid">')
-    $null = $sb.AppendLine(('<div class="summary-card"><h3>Total Detections</h3><div class="value">{0}</div><div class="subtext">Signals requiring investigation</div></div>' -f $totalDetections))
-    $null = $sb.AppendLine(('<div class="summary-card secondary"><h3>Playbooks Triggered</h3><div class="value">{0}</div><div class="subtext">Automated responses executed</div></div>' -f $totalPlaybooks))
+    $null = $sb.AppendLine(('<div class="summary-card" data-tooltip="Canonical detections emitted in this window."><h3>Total Detections</h3><div class="value">{0}</div><div class="subtext">Signals requiring investigation</div></div>' -f $totalDetections))
+    $null = $sb.AppendLine(('<div class="summary-card secondary" data-tooltip="Playbooks triggered (simulated or executed)."><h3>Playbooks Triggered</h3><div class="value">{0}</div><div class="subtext">Automated responses executed</div></div>' -f $totalPlaybooks))
+    $null = $sb.AppendLine(('<div class="summary-card" data-tooltip="Unique user identities represented across detections."><h3>Impacted Users</h3><div class="value">{0}</div><div class="subtext">Distinct identities flagged</div></div>' -f $impactUserCount))
+    $null = $sb.AppendLine(('<div class="summary-card" data-tooltip="Best-practice callouts recorded for SecOps follow-up."><h3>Best Practices</h3><div class="value">{0}</div><div class="subtext">{1}</div></div>' -f $bestPracticeCount, (& $encode $bestPracticeSubtext)))
     $null = $sb.AppendLine('</div>')
 
     $null = $sb.AppendLine('<div class="severity-board">')
     $null = $sb.AppendLine('<h3>Detection Severity Mix</h3>')
+    $null = $sb.AppendLine(('<div class="callout">{0}</div>' -f (& $encode $severityCallout)))
     foreach ($sev in $severityOrder) {
         if (-not $detSeverityCounts.Contains($sev)) { continue }
         $count = $detSeverityCounts[$sev]
@@ -3855,8 +4542,55 @@ function New-MfaHtmlReport {
         $null = $sb.AppendLine(('<div class="meter-label"><span>{0}</span><span>{1} ({2}%)</span></div>' -f (& $encode $sev), $count, $percent))
         $null = $sb.AppendLine('<div class="meter-bar">')
         $null = $sb.AppendLine(('<div class="meter-fill {0}" style="width: {1}%;"></div>' -f (& $severityClass $sev), [math]::Max($percent, 0)))
-        $null = $sb.AppendLine('</div></div>')
+        $null = $sb.AppendLine('</div>')
+
+        if ($severitySparkSeries.ContainsKey($sev)) {
+            $series = $severitySparkSeries[$sev]
+            $maxValue = ($series | Measure-Object -Maximum).Maximum
+            if (-not $maxValue -or $maxValue -lt 1) { $maxValue = 1 }
+            $null = $sb.AppendLine('<div class="sparkline">')
+            for ($i = 0; $i -lt $series.Count; $i++) {
+                $height = [math]::Max(4, [math]::Round(($series[$i] / $maxValue) * 100))
+                $labelText = "{0} · {1} detection(s)" -f $bucketLabels[$i], $series[$i]
+                $null = $sb.AppendLine(('<span style="height: {0}%;" title="{1}"></span>' -f $height, (& $encode $labelText)))
+            }
+            $null = $sb.AppendLine('</div>')
+        }
+
+        $null = $sb.AppendLine('</div>')
     }
+
+    if ($totalDetections -gt 0) {
+        $null = $sb.AppendLine('<div class="top-contributors"><h4>Top contributors by severity</h4><ul>')
+        foreach ($sev in $severityOrder) {
+            if (-not $severityContributors.ContainsKey($sev)) { continue }
+            $entries = @()
+            foreach ($item in $severityContributors[$sev].GetEnumerator()) {
+                $entries += [pscustomobject]@{
+                    Label  = $item.Key
+                    Count  = $item.Value.Count
+                    Anchor = $item.Value.Anchor
+                }
+            }
+            $topEntries = @($entries | Sort-Object -Property Count -Descending | Select-Object -First 2)
+            if ($topEntries.Count -eq 0) { continue }
+
+            $linkParts = @()
+            foreach ($entry in $topEntries) {
+                $safeLabel = & $encode $entry.Label
+                if ($entry.Anchor) {
+                    $linkParts += ("<a href=""#{0}"">{1}</a> ({2})" -f $entry.Anchor, $safeLabel, $entry.Count)
+                }
+                else {
+                    $linkParts += ("<span>{0} ({1})</span>" -f $safeLabel, $entry.Count)
+                }
+            }
+
+            $null = $sb.AppendLine(('<li><strong>{0}:</strong> {1}</li>' -f (& $encode $sev), ($linkParts -join ' · ')))
+        }
+        $null = $sb.AppendLine('</ul></div>')
+    }
+
     $null = $sb.AppendLine('<h3>Playbook Severity Mix</h3>')
     foreach ($sev in $severityOrder) {
         if (-not $playSeverityCounts.Contains($sev)) { continue }
@@ -3911,6 +4645,17 @@ function New-MfaHtmlReport {
                 }
             }
 
+            $governanceRefs = @()
+            if ($note.PSObject.Properties['GovernanceReferences']) {
+                $rawRefs = $note.GovernanceReferences
+                if ($rawRefs -is [System.Collections.IEnumerable] -and -not ($rawRefs -is [string])) {
+                    $governanceRefs = @($rawRefs | Where-Object { $_ }) | ForEach-Object { [string]$_ }
+                }
+                elseif ($rawRefs) {
+                    $governanceRefs = @([string]$rawRefs)
+                }
+            }
+
             $null = $sb.AppendLine('<div class="card best-card">')
             $null = $sb.AppendLine(('<div class="title"><span>{0}</span><span class="chip {1}">{2}</span></div>' -f (& $encode $title), $class, (& $encode $importance)))
             if ($audience) {
@@ -3922,187 +4667,109 @@ function New-MfaHtmlReport {
             if ($evidenceString) {
                 $null = $sb.AppendLine(('<div class="info"><strong>Evidence:</strong> {0}</div>' -f (& $encode $evidenceString)))
             }
-            foreach ($action in $actionItems) {
-                $null = $sb.AppendLine(('<div class="info"><strong>Action:</strong> {0}</div>' -f (& $encode $action)))
+            if ($actionItems.Count -gt 0) {
+                $null = $sb.AppendLine('<ul class="checklist">')
+                foreach ($action in $actionItems) {
+                    $null = $sb.AppendLine(('<li>{0}</li>' -f (& $encode $action)))
+                }
+                $null = $sb.AppendLine('</ul>')
+            }
+            if ($governanceRefs.Count -gt 0) {
+                $null = $sb.AppendLine('<div class="governance">')
+                foreach ($reference in $governanceRefs) {
+                    $null = $sb.AppendLine(('<span>{0}</span>' -f (& $encode $reference)))
+                }
+                $null = $sb.AppendLine('</div>')
             }
             $null = $sb.AppendLine('</div>')
         }
         $null = $sb.AppendLine('</div>')
     }
 
-    $null = $sb.AppendLine("<h2>Detections ({0})</h2>" -f $detCollection.Count)
-    if ($detCollection.Count -gt 0) {
-        $null = $sb.AppendLine('<table>')
+    $null = $sb.AppendLine("<h2>Detections ({0})</h2>" -f $preparedDetections.Count)
+    if ($preparedDetections.Count -gt 0) {
+        $severityFilters = @($severityOrder | Where-Object { $detSeverityCounts.Contains($_) -and $detSeverityCounts[$_] -gt 0 })
+        $userFiltersLimited = @($uniqueUsers | Select-Object -First 8)
+        $ownerFiltersLimited = @($uniqueControlOwners | Select-Object -First 8)
+
+        if ($severityFilters.Count -gt 0 -or $userFiltersLimited.Count -gt 0 -or $ownerFiltersLimited.Count -gt 0) {
+            $null = $sb.AppendLine('<div class="filter-panel">')
+            if ($severityFilters.Count -gt 0) {
+                $null = $sb.AppendLine('<div class="filter-group"><div class="filter-label">Severity</div>')
+                foreach ($sev in $severityFilters) {
+                    $null = $sb.AppendLine(('<button type="button" class="chip-filter" data-filter-group="severity" data-filter-value="{0}">{1}</button>' -f
+                        $sev.ToLowerInvariant(),
+                        (& $encode $sev)))
+                }
+                $null = $sb.AppendLine('</div>')
+            }
+            if ($userFiltersLimited.Count -gt 0) {
+                $null = $sb.AppendLine('<div class="filter-group"><div class="filter-label">User</div>')
+                foreach ($userValue in $userFiltersLimited) {
+                    $null = $sb.AppendLine(('<button type="button" class="chip-filter" data-filter-group="user" data-filter-value="{0}">{1}</button>' -f
+                        ([string]$userValue).ToLowerInvariant(),
+                        (& $encode $userValue)))
+                }
+                $null = $sb.AppendLine('</div>')
+            }
+            if ($ownerFiltersLimited.Count -gt 0) {
+                $null = $sb.AppendLine('<div class="filter-group"><div class="filter-label">Control Owner</div>')
+                foreach ($ownerValue in $ownerFiltersLimited) {
+                    $null = $sb.AppendLine(('<button type="button" class="chip-filter" data-filter-group="owner" data-filter-value="{0}">{1}</button>' -f
+                        ([string]$ownerValue).ToLowerInvariant(),
+                        (& $encode $ownerValue)))
+                }
+                $null = $sb.AppendLine('</div>')
+            }
+            $null = $sb.AppendLine('<button type="button" class="chip-clear" data-clear-filters="true">Clear filters</button>')
+            $null = $sb.AppendLine('</div>')
+        }
+
+        $null = $sb.AppendLine('<table id="detections-table">')
         $null = $sb.AppendLine('<thead><tr><th>Detection ID</th><th>User</th><th>Severity</th><th>Control Owner</th><th>Response SLA (hrs)</th><th>Details</th></tr></thead>')
         $null = $sb.AppendLine('<tbody>')
-        $detectionDetails = {
-            param($det)
-
-            if ($det.PSObject.Properties['Summary'] -and $det.Summary) {
-                return [string]$det.Summary
-            }
-
-            if ($det.PSObject.Properties['Score'] -and $det.Score) {
-                $scoreText = "Suspicious activity score: {0}" -f $det.Score
-                $indicatorNames = @()
-                if ($det.PSObject.Properties['Indicators'] -and $det.Indicators) {
-                    foreach ($indicator in @($det.Indicators)) {
-                        if (-not $indicator) { continue }
-                        if ($indicator.PSObject.Properties['Type'] -and $indicator.Type) {
-                            $indicatorNames += [string]$indicator.Type
-                        }
-                        elseif ($indicator -is [string]) {
-                            $indicatorNames += [string]$indicator
-                        }
-                    }
-                }
-
-                $indicatorNames = @($indicatorNames | Where-Object { $_ }) | Sort-Object -Unique
-                if ($indicatorNames.Count -gt 0) {
-                    return ("{0}. Signals: {1}" -f $scoreText, ($indicatorNames -join ', '))
-                }
-
-                return $scoreText
-            }
-
-            if ($det.PSObject.Properties['FailureReasons'] -and $det.FailureReasons) {
-                $reasons = @($det.FailureReasons)
-                if ($reasons.Count -gt 0) {
-                    $flat = (($reasons -join ';') -split ';') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-                    if ($flat) {
-                        return ("Failure reasons: {0}" -f ((@($flat | Sort-Object -Unique)) -join ', '))
-                    }
-                }
-            }
-
-            if ($det.PSObject.Properties['MethodType'] -and $det.MethodType) {
-                if ($det.PSObject.Properties['LastUpdatedDateTime'] -and $det.LastUpdatedDateTime) {
-                    $parsed = ConvertTo-MfaDateTime -Value $det.LastUpdatedDateTime
-                    if ($parsed) {
-                        return ("Method {0} last updated {1:u}" -f $det.MethodType, $parsed)
-                    }
-                }
-                return ("Method {0} flagged for review" -f $det.MethodType)
-            }
-
-            if ($det.PSObject.Properties['RiskDetail'] -and $det.RiskDetail) {
-                return ("Risk detail: {0}" -f $det.RiskDetail)
-            }
-
-            if ($det.PSObject.Properties['CorrelationId'] -and $det.CorrelationId) {
-                return ("Correlation ID: {0}" -f $det.CorrelationId)
-            }
-            return ''
-        }
-        $playbookSummary = {
-            param([string[]] $PlaybookIds)
-
-            if (-not $PlaybookIds -or $PlaybookIds.Count -eq 0) {
-                return $null
-            }
-
-            $unique = @($PlaybookIds | Where-Object { $_ }) | Sort-Object -Unique
-            if ($unique.Count -eq 0) {
-                return $null
-            }
-
-            $names = foreach ($id in $unique) {
-                if ($playbookFriendlyNames.ContainsKey($id)) {
-                    "{0} – {1}" -f $id, $playbookFriendlyNames[$id]
-                }
-                else {
-                    $id
-                }
-            }
-
-            $suffix = if ($names.Count -gt 1) { 's' } else { '' }
-            return ("Recommended playbook{0}: {1}" -f $suffix, ($names -join ', '))
-        }
-
-        foreach ($det in $detCollection) {
-            $severity = if ($det.PSObject.Properties['Severity']) { [string]$det.Severity } else { '' }
-            $class = switch ($severity.ToLowerInvariant()) {
-                'critical' { 'sev-critical' }
-                'high' { 'sev-high' }
-                'medium' { 'sev-medium' }
-                default { 'sev-low' }
-            }
-            $detectionId = ''
-            if ($det.PSObject.Properties['DetectionId'] -and $det.DetectionId) {
-                $detectionId = [string]$det.DetectionId
-            }
-            elseif ($det.PSObject.Properties['SignalId'] -and $det.SignalId) {
-                $detectionId = [string]$det.SignalId
-            }
-            elseif ($det.PSObject.Properties['Source'] -and $det.Source) {
-                $detectionId = [string]$det.Source
-            }
-            elseif ($det.PSObject.Properties['RecordType'] -and $det.RecordType) {
-                $detectionId = [string]$det.RecordType
-            }
-
-            $user = if ($det.PSObject.Properties['UserPrincipalName']) { [string]$det.UserPrincipalName } else { '' }
-            $controlOwner = if ($det.PSObject.Properties['ControlOwner']) { [string]$det.ControlOwner } else { '' }
-            $sla = if ($det.PSObject.Properties['ResponseSlaHours']) { [string]$det.ResponseSlaHours } else { '' }
-            $detailText = & $detectionDetails $det
-            if (-not $detailText) {
-                $detailText = 'Additional context not supplied.'
-            }
-            $detKeys = @()
-            if ($det.PSObject.Properties['DetectionId'] -and $det.DetectionId) { $detKeys += [string]$det.DetectionId }
-            if ($det.PSObject.Properties['SignalId'] -and $det.SignalId) { $detKeys += [string]$det.SignalId }
-            if ($detectionId) { $detKeys += [string]$detectionId }
-            $detKeys = @($detKeys | Where-Object { $_ }) | Sort-Object -Unique
-
-            $playbookIds = @()
-            foreach ($key in $detKeys) {
-                if ($playbookLookup.ContainsKey($key)) {
-                    foreach ($play in $playbookLookup[$key]) {
-                        if ($play -and $play.PSObject.Properties['PlaybookId'] -and $play.PlaybookId) {
-                            $playbookIds += [string]$play.PlaybookId
-                        }
-                    }
-                }
-            }
-            if ($playbookIds.Count -eq 0) {
-                foreach ($key in $detKeys) {
-                    if ($defaultPlaybookRecommendations.ContainsKey($key)) {
-                        $playbookIds += $defaultPlaybookRecommendations[$key]
-                    }
-                }
-            }
-            $playbookIds = @($playbookIds | Where-Object { $_ }) | Sort-Object -Unique
-            $remediationText = $null
-            if ($playbookIds.Count -gt 0) {
-                $remediationText = & $playbookSummary $playbookIds
-            }
-
-            if ($remediationText) {
-                if ($detailText -and ($detailText.Trim().EndsWith('.') -eq $false)) {
-                    $detailText = $detailText.Trim() + '.'
-                }
-                $detailText = ($detailText.Trim() + ' ' + $remediationText).Trim()
-            }
-
-            $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td><td>{6}</td></tr>" -f
-                $class,
-                (& $encode $detectionId),
-                (& $encode $user),
-                (& $encode $severity),
-                (& $encode $controlOwner),
-                (& $encode $sla),
-                (& $encode $detailText)
+        foreach ($row in $preparedDetections) {
+            $null = $sb.AppendLine(("<tr id=""{0}"" class=""{1}"" data-severity=""{2}"" data-user=""{3}"" data-owner=""{4}"">" -f
+                $row.RowId,
+                $row.SeverityClass,
+                (& $encode $row.SeverityKey),
+                (& $encode $row.UserKey),
+                (& $encode $row.OwnerKey)
             ))
+            $null = $sb.AppendLine(('<td>{0}</td>' -f (& $encode $row.DetectionId)))
+            $null = $sb.AppendLine(('<td>{0}</td>' -f (& $encode $row.User)))
+            $null = $sb.AppendLine(('<td>{0}</td>' -f (& $encode $row.Severity)))
+            $null = $sb.AppendLine(('<td>{0}</td>' -f (& $encode $row.ControlOwner)))
+            $null = $sb.AppendLine(('<td>{0}</td>' -f (& $encode $row.Sla)))
+            $null = $sb.AppendLine('<td>')
+            $null = $sb.AppendLine(('<div class="info">{0}</div>' -f (& $encode $row.DetailText)))
+            if ($row.PlaybookBadges.Count -gt 0) {
+                $null = $sb.AppendLine('<div class="remediation-list">')
+                foreach ($badge in $row.PlaybookBadges) {
+                    $label = if ($badge.Label) { "{0} · {1}" -f $badge.Id, $badge.Label } else { $badge.Id }
+                    $null = $sb.AppendLine(('<span class="remediation-badge">{0}</span>' -f (& $encode $label)))
+                }
+                $null = $sb.AppendLine('</div>')
+            }
+            if ($row.EvidenceItems.Count -gt 0) {
+                $null = $sb.AppendLine(('<button type="button" class="drawer-toggle" data-drawer-target="#{0}">Evidence</button>' -f $row.DrawerId))
+                $null = $sb.AppendLine(('<div id="{0}" class="drawer collapsed"><ul>' -f $row.DrawerId))
+                foreach ($evidence in $row.EvidenceItems) {
+                    $null = $sb.AppendLine(('<li>{0}</li>' -f (& $encode $evidence)))
+                }
+                $null = $sb.AppendLine('</ul></div>')
+            }
+            $null = $sb.AppendLine('</td></tr>')
         }
         $null = $sb.AppendLine('</tbody></table>')
         $null = $sb.AppendLine('<div class="cards">')
-        foreach ($det in $detCollection) {
-            $severity = if ($det.PSObject.Properties['Severity']) { [string]$det.Severity } else { 'Informational' }
-            $class = & $severityClass $severity
-            $detectionId = if ($det.PSObject.Properties['DetectionId']) { [string]$det.DetectionId } else { 'Unknown Detection' }
-            $user = if ($det.PSObject.Properties['UserPrincipalName']) { [string]$det.UserPrincipalName } else { 'Unknown user' }
-            $controlOwner = if ($det.PSObject.Properties['ControlOwner']) { [string]$det.ControlOwner } else { 'Unassigned' }
-            $sla = if ($det.PSObject.Properties['ResponseSlaHours']) { [string]$det.ResponseSlaHours } else { '—' }
+        foreach ($row in $preparedDetections) {
+            $severity = $row.Severity
+            $class = $row.SeverityClass
+            $detectionId = if ($row.DetectionId) { [string]$row.DetectionId } else { 'Unknown Detection' }
+            $user = if ($row.User) { [string]$row.User } else { 'Unknown user' }
+            $controlOwner = if ($row.ControlOwner) { [string]$row.ControlOwner } else { 'Unassigned' }
+            $sla = if ($row.Sla) { [string]$row.Sla } else { '-' }
 
             $null = $sb.AppendLine('<div class="card">')
             $null = $sb.AppendLine(('<div class="title"><span>{0}</span><span class="chip {1}">{2}</span></div>' -f (& $encode $detectionId), $class, (& $encode $severity)))
@@ -4120,48 +4787,87 @@ function New-MfaHtmlReport {
     $null = $sb.AppendLine("<h2>Playbook Actions ({0})</h2>" -f $playCollection.Count)
     if ($playCollection.Count -gt 0) {
         $null = $sb.AppendLine('<table>')
-        $null = $sb.AppendLine('<thead><tr><th>Playbook</th><th>User</th><th>Severity</th><th>Ticket Target</th><th>Notification Target</th></tr></thead>')
+        $null = $sb.AppendLine('<thead><tr><th>Playbook</th><th>User</th><th>Severity</th><th>State</th><th>Ticket Target</th><th>Notification Target</th></tr></thead>')
         $null = $sb.AppendLine('<tbody>')
         foreach ($entry in $playCollection) {
             $playbook = $entry.Playbook
-            $severity = if ($playbook -and $playbook.PSObject.Properties['Severity']) { [string]$playbook.Severity } else { '' }
-            $class = switch ($severity.ToLowerInvariant()) {
-                'critical' { 'sev-critical' }
-                'high' { 'sev-high' }
-                'medium' { 'sev-medium' }
-                default { 'sev-low' }
+            $severity = if ($playbook -and $playbook.PSObject.Properties['Severity']) { [string]$playbook.Severity } else { 'Informational' }
+            $canonPlaySeverity = & $canonicalSeverity $severity
+            $class = & $severityClass $canonPlaySeverity
+            $playbookId = if ($playbook -and $playbook.PSObject.Properties['PlaybookId']) { [string]$playbook.PlaybookId } else { 'Playbook' }
+            $user = if ($playbook -and $playbook.PSObject.Properties['UserPrincipalName']) { [string]$playbook.UserPrincipalName } else { 'Unknown user' }
+
+            $stateLabel = 'Success'
+            $stateClass = 'status-success'
+            if ($playbook -and $playbook.PSObject.Properties['IsSimulation'] -and $playbook.IsSimulation) {
+                $stateLabel = 'WhatIf'
+                $stateClass = 'status-whatif'
+            }
+            elseif ($playbook -and $playbook.PSObject.Properties['Errors'] -and $playbook.Errors) {
+                $stateLabel = 'Error'
+                $stateClass = 'status-error'
             }
 
-            $ticketTarget = if ($entry.TicketTarget) { $entry.TicketTarget } else { 'Not sent' }
-            $notificationTarget = if ($entry.NotificationTarget) { $entry.NotificationTarget } else { 'Not sent' }
-            $playbookId = if ($playbook -and $playbook.PSObject.Properties['PlaybookId']) { [string]$playbook.PlaybookId } else { '' }
-            $user = if ($playbook -and $playbook.PSObject.Properties['UserPrincipalName']) { [string]$playbook.UserPrincipalName } else { '' }
+            $ticketDisplay = & $formatLinkHtml $entry.TicketTarget
+            $notificationDisplay = & $formatLinkHtml $entry.NotificationTarget
 
-            $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td></tr>" -f
+            $null = $sb.AppendLine(("<tr class=""{0}""><td>{1}</td><td>{2}</td><td>{3}</td><td>{4}</td><td>{5}</td><td>{6}</td></tr>" -f
                 $class,
                 (& $encode $playbookId),
                 (& $encode $user),
-                (& $encode $severity),
-                (& $encode $ticketTarget),
-                (& $encode $notificationTarget)
+                (& $encode $canonPlaySeverity),
+                (& $encode $stateLabel),
+                $ticketDisplay,
+                $notificationDisplay
             ))
         }
         $null = $sb.AppendLine('</tbody></table>')
-        $null = $sb.AppendLine('<div class="cards">')
+        $null = $sb.AppendLine('<div class="playbook-tiles">')
         foreach ($entry in $playCollection) {
             $playbook = $entry.Playbook
             $severity = if ($playbook -and $playbook.PSObject.Properties['Severity']) { [string]$playbook.Severity } else { 'Informational' }
-            $class = & $severityClass $severity
+            $canonPlaySeverity = & $canonicalSeverity $severity
+            $class = & $severityClass $canonPlaySeverity
             $playbookId = if ($playbook -and $playbook.PSObject.Properties['PlaybookId']) { [string]$playbook.PlaybookId } else { 'Playbook' }
             $user = if ($playbook -and $playbook.PSObject.Properties['UserPrincipalName']) { [string]$playbook.UserPrincipalName } else { 'Unknown user' }
-            $ticketTarget = if ($entry.TicketTarget) { [string]$entry.TicketTarget } else { 'Not sent' }
-            $notificationTarget = if ($entry.NotificationTarget) { [string]$entry.NotificationTarget } else { 'Not sent' }
+            $ticketDisplay = & $formatLinkHtml $entry.TicketTarget
+            $notificationDisplay = & $formatLinkHtml $entry.NotificationTarget
 
-            $null = $sb.AppendLine('<div class="card">')
-            $null = $sb.AppendLine(('<div class="title"><span>{0}</span><span class="chip {1}">{2}</span></div>' -f (& $encode $playbookId), $class, (& $encode $severity)))
-            $null = $sb.AppendLine(('<div class="info"><strong>User:</strong> {0}</div>' -f (& $encode $user)))
-            $null = $sb.AppendLine(('<div class="info"><strong>Ticket:</strong></div><div class="target">{0}</div>' -f (& $encode $ticketTarget)))
-            $null = $sb.AppendLine(('<div class="info"><strong>Notification:</strong></div><div class="target">{0}</div>' -f (& $encode $notificationTarget)))
+            $stateLabel = 'Success'
+            $stateClass = 'status-pill status-success'
+            if ($playbook -and $playbook.PSObject.Properties['IsSimulation'] -and $playbook.IsSimulation) {
+                $stateLabel = 'WhatIf'
+                $stateClass = 'status-pill status-whatif'
+            }
+            elseif ($playbook -and $playbook.PSObject.Properties['Errors'] -and $playbook.Errors) {
+                $stateLabel = 'Error'
+                $stateClass = 'status-pill status-error'
+            }
+
+            $executedSteps = @()
+            if ($playbook -and $playbook.PSObject.Properties['ExecutedSteps'] -and $playbook.ExecutedSteps) {
+                $executedSteps = @($playbook.ExecutedSteps | Where-Object { $_ })
+            }
+            $stepPreview = @($executedSteps | Select-Object -First 3)
+
+            $null = $sb.AppendLine('<div class="playbook-tile">')
+            $null = $sb.AppendLine(('<div class="playbook-head"><div><div class="hero-label">Playbook</div><div class="hero-primary">{0}</div></div><span class="{1}">{2}</span></div>' -f (& $encode $playbookId), $stateClass, (& $encode $stateLabel)))
+            $null = $sb.AppendLine(('<div class="playbook-meta"><strong>User:</strong> {0}</div>' -f (& $encode $user)))
+            if ($stepPreview.Count -gt 0) {
+                $null = $sb.AppendLine('<div class="step-list">')
+                foreach ($step in $stepPreview) {
+                    $null = $sb.AppendLine(('<span>{0}</span>' -f (& $encode $step)))
+                }
+                if ($executedSteps.Count -gt $stepPreview.Count) {
+                    $remaining = $executedSteps.Count - $stepPreview.Count
+                    $null = $sb.AppendLine(('<span>+{0} additional step(s)</span>' -f $remaining))
+                }
+                $null = $sb.AppendLine('</div>')
+            }
+            $null = $sb.AppendLine('<div class="link-row">')
+            $null = $sb.AppendLine(('<div>Ticket: {0}</div>' -f $ticketDisplay))
+            $null = $sb.AppendLine(('<div>Notification: {0}</div>' -f $notificationDisplay))
+            $null = $sb.AppendLine('</div>')
             $null = $sb.AppendLine('</div>')
         }
         $null = $sb.AppendLine('</div>')
@@ -4169,6 +4875,77 @@ function New-MfaHtmlReport {
     else {
         $null = $sb.AppendLine('<p>No playbook actions recorded for this period.</p>')
     }
+
+    $interactionScript = @'
+<script>
+(() => {
+  const filterState = { severity: new Set(), user: new Set(), owner: new Set() };
+  const table = document.getElementById('detections-table');
+  const rows = table ? Array.from(table.querySelectorAll('tbody tr')) : [];
+
+  const applyFilters = () => {
+    rows.forEach(row => {
+      let visible = true;
+      for (const key in filterState) {
+        if (!filterState[key] || filterState[key].size === 0) {
+          continue;
+        }
+        const value = row.dataset[key] || 'none';
+        if (!filterState[key].has(value)) {
+          visible = false;
+          break;
+        }
+      }
+      row.style.display = visible ? '' : 'none';
+    });
+  };
+
+  document.querySelectorAll('[data-filter-group]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const group = chip.dataset.filterGroup;
+      const value = chip.dataset.filterValue;
+      if (!group || !value) {
+        return;
+      }
+
+      if (!filterState[group]) {
+        filterState[group] = new Set();
+      }
+
+      if (filterState[group].has(value)) {
+        filterState[group].delete(value);
+        chip.classList.remove('active');
+      } else {
+        filterState[group].add(value);
+        chip.classList.add('active');
+      }
+
+      applyFilters();
+    });
+  });
+
+  document.querySelectorAll('[data-clear-filters]').forEach(button => {
+    button.addEventListener('click', () => {
+      Object.keys(filterState).forEach(key => filterState[key].clear());
+      document.querySelectorAll('[data-filter-group]').forEach(chip => chip.classList.remove('active'));
+      applyFilters();
+    });
+  });
+
+  document.querySelectorAll('[data-drawer-target]').forEach(button => {
+    button.addEventListener('click', () => {
+      const target = document.querySelector(button.dataset.drawerTarget);
+      if (target) {
+        target.classList.toggle('collapsed');
+      }
+    });
+  });
+
+  applyFilters();
+})();
+</script>
+'@
+    $null = $sb.AppendLine($interactionScript)
 
     $null = $sb.AppendLine('</body></html>')
 
@@ -4224,6 +5001,7 @@ function Invoke-MfaScenarioReport {
         [string] $OutputDirectory,
         [switch] $SkipAuthorization,
         [switch] $OpenReport,
+        [psobject] $ReportContext,
         [switch] $PassThru
     )
 
@@ -4251,6 +5029,42 @@ function Invoke-MfaScenarioReport {
         $rawScenario = $Scenario
     }
 
+    $reportContextSeed = [ordered]@{}
+    if ($ReportContext) {
+        if ($ReportContext -is [System.Collections.IDictionary]) {
+            foreach ($key in $ReportContext.Keys) {
+                $reportContextSeed[$key] = $ReportContext[$key]
+            }
+        }
+        else {
+            foreach ($prop in $ReportContext.PSObject.Properties) {
+                $reportContextSeed[$prop.Name] = $prop.Value
+            }
+        }
+    }
+
+    $setContextValue = {
+        param([string] $Name, $Value, [switch] $Force)
+
+        if ($null -eq $Value -or $Value -eq '') { return }
+        if ($Force -or -not $reportContextSeed.Contains($Name)) {
+            $reportContextSeed[$Name] = $Value
+        }
+    }
+
+    & $setContextValue 'ScenarioId' ($rawScenario.ScenarioId)
+    & $setContextValue 'ScenarioName' ($rawScenario.Name)
+    & $setContextValue 'ScenarioDescription' ($rawScenario.Description)
+    if ($scenarioSource) {
+        & $setContextValue 'ScenarioPath' $scenarioSource
+    }
+    if ($rawScenario.PSObject.Properties['TenantName'] -and $rawScenario.TenantName) {
+        & $setContextValue 'TenantName' $rawScenario.TenantName
+    }
+    if ($rawScenario.PSObject.Properties['TenantId'] -and $rawScenario.TenantId) {
+        & $setContextValue 'TenantId' $rawScenario.TenantId
+    }
+
     $signIns = @()
     if ($rawScenario.PSObject.Properties['SignIns']) {
         $signIns = @($rawScenario.SignIns) | Where-Object { $_ }
@@ -4264,6 +5078,29 @@ function Invoke-MfaScenarioReport {
     $roleAssignments = @()
     if ($rawScenario.PSObject.Properties['RoleAssignments']) {
         $roleAssignments = @($rawScenario.RoleAssignments) | Where-Object { $_ }
+    }
+
+    $scenarioTimes = @()
+    foreach ($record in $signIns) {
+        if ($record -and $record.PSObject.Properties['CreatedDateTime'] -and $record.CreatedDateTime) {
+            $ts = ConvertTo-MfaDateTime -Value $record.CreatedDateTime
+            if ($ts) { $scenarioTimes += $ts }
+        }
+    }
+    foreach ($record in $registrations) {
+        if (-not $record) { continue }
+        $timeSource = $null
+        if ($record.PSObject.Properties['LastUpdatedDateTime'] -and $record.LastUpdatedDateTime) {
+            $timeSource = $record.LastUpdatedDateTime
+        }
+        elseif ($record.PSObject.Properties['CreatedDateTime'] -and $record.CreatedDateTime) {
+            $timeSource = $record.CreatedDateTime
+        }
+
+        if ($timeSource) {
+            $ts = ConvertTo-MfaDateTime -Value $timeSource
+            if ($ts) { $scenarioTimes += $ts }
+        }
     }
 
     $bestPracticeNotes = @()
@@ -4294,6 +5131,20 @@ function Invoke-MfaScenarioReport {
     }
     elseif ($signIns.Count -gt 0) {
         $referenceTime = ($signIns | ForEach-Object { [datetime]$_.CreatedDateTime } | Sort-Object)[-1]
+    }
+    & $setContextValue 'ReferenceTime' $referenceTime -Force
+    if ($referenceTime) {
+        $scenarioTimes += $referenceTime
+    }
+    if ($scenarioTimes.Count -gt 0) {
+        $calculatedStart = ($scenarioTimes | Sort-Object)[0]
+        $calculatedEnd = ($scenarioTimes | Sort-Object)[-1]
+        & $setContextValue 'LookbackStart' $calculatedStart
+        & $setContextValue 'LookbackEnd' $calculatedEnd
+        $durationHours = [math]::Round((($calculatedEnd - $calculatedStart).TotalHours), 1)
+        if ($durationHours -gt 0) {
+            & $setContextValue 'LookbackWindowHours' $durationHours
+        }
     }
 
     $allDetections = @()
@@ -4427,6 +5278,14 @@ function Invoke-MfaScenarioReport {
                 "Repeated MFA push denials were detected. Require Microsoft Authenticator number matching via Conditional Access authentication strength to neutralize push fatigue attacks."
             }
             Evidence   = $evidenceText
+            Actions    = @(
+                'Update privileged-access authentication strength to enforce number matching',
+                'Brief SecOps and IAM owners on fatigue indicators observed in sign-ins'
+            )
+            GovernanceReferences = @(
+                'MFA-CFG-008 - Push Fatigue Hardening',
+                'MFA-PL-005 - Contain Repeated MFA Failures'
+            )
         }
     }
 
@@ -4482,7 +5341,7 @@ function Invoke-MfaScenarioReport {
 
     $timestamp = (Get-Date).ToString('yyyyMMddTHHmmss')
     $htmlPath = Join-Path -Path $OutputDirectory -ChildPath ("scenario-report-{0}.html" -f $timestamp)
-    $report = New-MfaHtmlReport -Detections $allDetections -Playbooks $playbookOutputs -BestPractices $bestPracticeNotes -Path $htmlPath -OpenInBrowser:$OpenReport
+    $report = New-MfaHtmlReport -Detections $allDetections -Playbooks $playbookOutputs -BestPractices $bestPracticeNotes -Context ([pscustomobject]$reportContextSeed) -Path $htmlPath -OpenInBrowser:$OpenReport
 
     Write-Verbose ("HTML report saved to: {0}" -f $report.Path)
 
@@ -4496,6 +5355,7 @@ function Invoke-MfaScenarioReport {
         OutputDirectory  = $OutputDirectory
         BestPracticeNotes = @($bestPracticeNotes)
         BestPracticeCount = @($bestPracticeNotes).Count
+        ReportContext    = [pscustomobject]$reportContextSeed
     }
 
     if ($PassThru) {
@@ -4596,15 +5456,59 @@ function Invoke-MfaTenantReport {
         RoleAssignments = $roleAssignmentData
     }
 
+    $tenantDisplayName = if ($graphContext -and $graphContext.PSObject.Properties['TenantDisplayName']) { $graphContext.TenantDisplayName } else { 'Microsoft Entra Tenant' }
+    $scenarioContext = [ordered]@{
+        TenantName          = $tenantDisplayName
+        TenantId            = $graphContext.TenantId
+        ScenarioName        = 'Tenant Snapshot'
+        ScenarioDescription = 'Live telemetry replay window'
+        LookbackStart       = $windowStart
+        LookbackEnd         = $effectiveReferenceTime
+        ReferenceTime       = $effectiveReferenceTime
+        LookbackWindowHours = $lookback
+    }
+
+    $scenarioContextObject = [pscustomobject]$scenarioContext
     $reportParams = @{
         Scenario         = [pscustomobject]$scenarioPayload
         OutputDirectory  = $OutputDirectory
         SkipAuthorization = $SkipAuthorization
         OpenReport        = $OpenReport
         PassThru          = $true
+        ReportContext     = $scenarioContextObject
     }
 
     $result = Invoke-MfaScenarioReport @reportParams
+
+    if ($result) {
+        $existingContext = $null
+        if ($result.PSObject.Properties['ReportContext']) {
+            $existingContext = $result.ReportContext
+        }
+
+        if ($existingContext) {
+            $mergedContext = [ordered]@{}
+            foreach ($entry in $scenarioContext.GetEnumerator()) {
+                $mergedContext[$entry.Key] = $entry.Value
+            }
+
+            if ($existingContext -is [System.Collections.IDictionary]) {
+                foreach ($key in $existingContext.Keys) {
+                    $mergedContext[$key] = $existingContext[$key]
+                }
+            }
+            else {
+                foreach ($prop in $existingContext.PSObject.Properties) {
+                    $mergedContext[$prop.Name] = $prop.Value
+                }
+            }
+
+            $result | Add-Member -NotePropertyName 'ReportContext' -NotePropertyValue ([pscustomobject]$mergedContext) -Force
+        }
+        else {
+            $result | Add-Member -NotePropertyName 'ReportContext' -NotePropertyValue $scenarioContextObject -Force
+        }
+    }
 
     $result | Add-Member -NotePropertyName 'LookbackHours' -NotePropertyValue $lookback -Force
     $result | Add-Member -NotePropertyName 'ReferenceTime' -NotePropertyValue $effectiveReferenceTime -Force
